@@ -1,6 +1,9 @@
 changed orientation to portrait (rotation 2)
+
 fixes color for my board
+
 disabled touch screen
+
 used pcf8575 i2c gpio expander for control
  
  
