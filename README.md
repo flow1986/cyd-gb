@@ -1,3 +1,9 @@
+changed orientation to portrait (rotation 2)
+fixes color for my board
+disabled touch screen
+used pcf8575 i2c gpio expander for control
+ 
+ 
  # 🎮 CYD-GB
 
 **Game Boy emulator for the $15 ESP32 Cheap Yellow Display — fully touchscreen controlled.**
