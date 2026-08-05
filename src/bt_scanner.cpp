@@ -415,8 +415,8 @@ static void draw_edit_menu_screen() {
     tft.drawString(station.name, 12, 46, 2);
     tft.drawString(station.mac, 12, 72, 1);
 
-    const char* labels[4] = {"Edit Name", "Edit MAC", "Morse", "Back"};
-    for (int i = 0; i < 4; ++i) {
+    const char* labels[5] = {"Edit Name", "Edit MAC", "Morse", "LDR Kalibrierung", "Back"};
+    for (int i = 0; i < 5; ++i) {
         int top = 96 + (i * 42);
         uint16_t bg = (i == selectedEditChoice) ? COLOR_ITEM_HL_BG : COLOR_ITEM_BG;
         uint16_t fg = (i == selectedEditChoice) ? COLOR_ITEM_HL_TEXT : COLOR_ITEM_TEXT;
@@ -427,7 +427,7 @@ static void draw_edit_menu_screen() {
         tft.drawString(labels[i], SCREEN_WIDTH / 2, top + 18, 2);
     }
 
-    draw_footer("Up/Down + A, B Back, LongTouch Cal");
+    draw_footer("Up/Down + A, B Back, LongTouch Touch-Cal");
 }
 
 static void draw_morse_menu_screen() {
@@ -510,6 +510,46 @@ static void wait_for_touch_release() {
     uint16_t x = 0;
     uint16_t y = 0;
     while (read_touch(&x, &y)) delay(20);
+}
+
+static void wait_for_touch_tap() {
+    uint16_t x = 0;
+    uint16_t y = 0;
+    while (!read_touch(&x, &y)) {
+        (void)read_buttons();
+        delay(20);
+    }
+    while (read_touch(&x, &y)) {
+        (void)read_buttons();
+        delay(20);
+    }
+    delay(40);
+}
+
+static uint8_t load_configured_backlight_level() {
+    uint8_t palette = 0;
+    uint8_t frameSkip = 0;
+    uint8_t brightness = 255;
+    (void)touch_load_settings(&palette, &frameSkip, &brightness, nullptr, nullptr);
+    return brightness;
+}
+
+static void run_ldr_calibration_preview() {
+    wait_for_touch_release();
+
+    uint8_t backlightLevel = load_configured_backlight_level();
+
+    tft.fillScreen(TFT_BLACK);
+    display_set_backlight(0);
+    draw_footer("Touch = Weiss  nochmal = Zuruck");
+
+    wait_for_touch_tap();
+
+    display_set_backlight(backlightLevel);
+    tft.fillScreen(TFT_WHITE);
+    draw_footer("Touch = Zuruck ins Menu");
+
+    wait_for_touch_tap();
 }
 
 static void show_pre_calibration_wait_screen() {
@@ -839,6 +879,13 @@ static bool touch_tap(uint16_t x, uint16_t y) {
                 return true;
             }
             if (y >= 222 && y <= 258) {
+                selectedEditChoice = 3;
+                run_ldr_calibration_preview();
+                draw_edit_menu_screen();
+                return true;
+            }
+            if (y >= 264 && y <= 300) {
+                selectedEditChoice = 4;
                 enter_list();
                 return true;
             }
@@ -913,17 +960,21 @@ static bool handle_buttons() {
         }
     } else if (scannerView == VIEW_EDIT_MENU) {
         if ((changed & GB_BTN_UP) && btn_pressed_edge(buttons, lastButtons, GB_BTN_UP)) {
-            selectedEditChoice = (selectedEditChoice + 3) % 4;
+            selectedEditChoice = (selectedEditChoice + 4) % 5;
             draw_edit_menu_screen();
         }
         if ((changed & GB_BTN_DOWN) && btn_pressed_edge(buttons, lastButtons, GB_BTN_DOWN)) {
-            selectedEditChoice = (selectedEditChoice + 1) % 4;
+            selectedEditChoice = (selectedEditChoice + 1) % 5;
             draw_edit_menu_screen();
         }
         if ((changed & GB_BTN_A) && btn_pressed_edge(buttons, lastButtons, GB_BTN_A)) {
             if (selectedEditChoice == 0) enter_name_editor();
             else if (selectedEditChoice == 1) enter_mac_editor();
             else if (selectedEditChoice == 2) enter_morse_menu();
+            else if (selectedEditChoice == 3) {
+                run_ldr_calibration_preview();
+                draw_edit_menu_screen();
+            }
             else enter_list();
         }
         if ((changed & GB_BTN_B) && btn_pressed_edge(buttons, lastButtons, GB_BTN_B)) {
