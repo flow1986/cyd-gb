@@ -142,6 +142,7 @@ static unsigned long touchPressStartMs = 0;
 static uint16_t touchPressX = 0;
 static uint16_t touchPressY = 0;
 static char morseWord[16] = "HINWEIS";
+static uint8_t morseSpeedPercent = MORSE_DEFAULT_SPEED_PERCENT;
 
 static inline bool list_selection_is_morse() {
     return selectedListIndex >= 4;
@@ -295,6 +296,12 @@ static void load_stations() {
             morseWord[sizeof(morseWord) - 1] = 0;
             normalize_morse_word(morseWord);
         }
+
+        morseSpeedPercent = constrain(
+            btPrefs.getUChar("mspd", MORSE_DEFAULT_SPEED_PERCENT),
+            MORSE_MIN_SPEED_PERCENT,
+            MORSE_MAX_SPEED_PERCENT
+        );
     }
     btPrefs.end();
 }
@@ -309,7 +316,17 @@ static void save_stations() {
         btPrefs.putString(macKey.c_str(), stations[i].mac);
     }
     btPrefs.putString("morse", morseWord);
+    btPrefs.putUChar("mspd", morseSpeedPercent);
     btPrefs.end();
+}
+
+static void adjust_morse_speed(int delta) {
+    int next = (int)morseSpeedPercent + delta;
+    next = constrain(next, (int)MORSE_MIN_SPEED_PERCENT, (int)MORSE_MAX_SPEED_PERCENT);
+    uint8_t speed = (uint8_t)next;
+    if (speed == morseSpeedPercent) return;
+    morseSpeedPercent = speed;
+    save_stations();
 }
 
 static void init_ble_scanner() {
@@ -435,19 +452,25 @@ static void draw_edit_menu_screen() {
     tft.drawString(station.name, 12, 46, 2);
     tft.drawString(station.mac, 12, 72, 1);
 
-    const char* labels[6] = {"Edit Name", "Edit MAC", "Morse", "Morse Kalibrierung", "LDR Kalibrierung", "Back"};
-    for (int i = 0; i < 6; ++i) {
-        int top = 90 + (i * 36);
+    const char* labels[7] = {"Edit Name", "Edit MAC", "Morse", "Morse Speed", "Morse Kalibrierung", "LDR Kalibrierung", "Back"};
+    for (int i = 0; i < 7; ++i) {
+        int top = 78 + (i * 34);
         uint16_t bg = (i == selectedEditChoice) ? COLOR_ITEM_HL_BG : COLOR_ITEM_BG;
         uint16_t fg = (i == selectedEditChoice) ? COLOR_ITEM_HL_TEXT : COLOR_ITEM_TEXT;
-        tft.fillRoundRect(12, top, SCREEN_WIDTH - 24, 30, 6, bg);
-        tft.drawRoundRect(12, top, SCREEN_WIDTH - 24, 30, 6, fg);
+        tft.fillRoundRect(12, top, SCREEN_WIDTH - 24, 28, 6, bg);
+        tft.drawRoundRect(12, top, SCREEN_WIDTH - 24, 28, 6, fg);
         tft.setTextColor(fg, bg);
         tft.setTextDatum(MC_DATUM);
-        tft.drawString(labels[i], SCREEN_WIDTH / 2, top + 15, 2);
+        if (i == 3) {
+            char speedLabel[28];
+            snprintf(speedLabel, sizeof(speedLabel), "Morse Speed: %u%%", morseSpeedPercent);
+            tft.drawString(speedLabel, SCREEN_WIDTH / 2, top + 14, 2);
+        } else {
+            tft.drawString(labels[i], SCREEN_WIDTH / 2, top + 14, 2);
+        }
     }
 
-    draw_footer("Up/Down + A, B Back, LongTouch Touch-Cal");
+    draw_footer("Up/Down, L/R Speed, A, B");
 }
 
 static void draw_morse_menu_screen() {
@@ -557,12 +580,7 @@ static uint8_t load_configured_backlight_level() {
 }
 
 static uint8_t load_configured_morse_speed_percent() {
-    uint8_t palette = 0;
-    uint8_t frameSkip = 0;
-    uint8_t brightness = 255;
-    uint8_t morseSpeed = MORSE_DEFAULT_SPEED_PERCENT;
-    (void)touch_load_settings(&palette, &frameSkip, &brightness, nullptr, nullptr, &morseSpeed);
-    return constrain(morseSpeed, MORSE_MIN_SPEED_PERCENT, MORSE_MAX_SPEED_PERCENT);
+    return constrain(morseSpeedPercent, MORSE_MIN_SPEED_PERCENT, MORSE_MAX_SPEED_PERCENT);
 }
 
 static unsigned long morse_unit_ms() {
@@ -963,35 +981,41 @@ static bool touch_tap(uint16_t x, uint16_t y) {
             enter_list();
             return true;
         case VIEW_EDIT_MENU:
-            if (y >= 90 && y <= 120) {
+            if (y >= 78 && y <= 106) {
                 selectedEditChoice = 0;
                 enter_name_editor();
                 return true;
             }
-            if (y >= 126 && y <= 156) {
+            if (y >= 112 && y <= 140) {
                 selectedEditChoice = 1;
                 enter_mac_editor();
                 return true;
             }
-            if (y >= 162 && y <= 192) {
+            if (y >= 146 && y <= 174) {
                 selectedEditChoice = 2;
                 enter_morse_menu();
                 return true;
             }
-            if (y >= 198 && y <= 228) {
+            if (y >= 180 && y <= 208) {
                 selectedEditChoice = 3;
+                adjust_morse_speed(10);
+                draw_edit_menu_screen();
+                return true;
+            }
+            if (y >= 214 && y <= 242) {
+                selectedEditChoice = 4;
                 run_morse_calibration_loop();
                 draw_edit_menu_screen();
                 return true;
             }
-            if (y >= 234 && y <= 264) {
-                selectedEditChoice = 4;
+            if (y >= 248 && y <= 276) {
+                selectedEditChoice = 5;
                 run_ldr_calibration_preview();
                 draw_edit_menu_screen();
                 return true;
             }
-            if (y >= 270 && y <= 300) {
-                selectedEditChoice = 5;
+            if (y >= 282 && y <= 310) {
+                selectedEditChoice = 6;
                 enter_list();
                 return true;
             }
@@ -1054,11 +1078,11 @@ static bool handle_buttons() {
         }
     } else if (scannerView == VIEW_EDIT_MENU) {
         if ((changed & GB_BTN_UP) && btn_pressed_edge(buttons, lastButtons, GB_BTN_UP)) {
-            selectedEditChoice = (selectedEditChoice + 5) % 6;
+            selectedEditChoice = (selectedEditChoice + 6) % 7;
             draw_edit_menu_screen();
         }
         if ((changed & GB_BTN_DOWN) && btn_pressed_edge(buttons, lastButtons, GB_BTN_DOWN)) {
-            selectedEditChoice = (selectedEditChoice + 1) % 6;
+            selectedEditChoice = (selectedEditChoice + 1) % 7;
             draw_edit_menu_screen();
         }
         if ((changed & GB_BTN_A) && btn_pressed_edge(buttons, lastButtons, GB_BTN_A)) {
@@ -1066,14 +1090,26 @@ static bool handle_buttons() {
             else if (selectedEditChoice == 1) enter_mac_editor();
             else if (selectedEditChoice == 2) enter_morse_menu();
             else if (selectedEditChoice == 3) {
-                run_morse_calibration_loop();
+                adjust_morse_speed(10);
                 draw_edit_menu_screen();
             }
             else if (selectedEditChoice == 4) {
+                run_morse_calibration_loop();
+                draw_edit_menu_screen();
+            }
+            else if (selectedEditChoice == 5) {
                 run_ldr_calibration_preview();
                 draw_edit_menu_screen();
             }
             else enter_list();
+        }
+        if ((changed & GB_BTN_LEFT) && btn_pressed_edge(buttons, lastButtons, GB_BTN_LEFT) && selectedEditChoice == 3) {
+            adjust_morse_speed(-10);
+            draw_edit_menu_screen();
+        }
+        if ((changed & GB_BTN_RIGHT) && btn_pressed_edge(buttons, lastButtons, GB_BTN_RIGHT) && selectedEditChoice == 3) {
+            adjust_morse_speed(10);
+            draw_edit_menu_screen();
         }
         if ((changed & GB_BTN_B) && btn_pressed_edge(buttons, lastButtons, GB_BTN_B)) {
             enter_list();

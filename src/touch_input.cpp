@@ -90,19 +90,18 @@ static bool load_cal_from_nvs() {
 
 // ─── Settings NVS ───────────────────────────────────────────────────────────
 void touch_save_settings(uint8_t palette, uint8_t fskip, uint8_t brightness,
-                         bool show_fps, bool show_save_overlay, uint8_t morse_speed) {
+                         bool show_fps, bool show_save_overlay) {
     prefs.begin("settings", false);
     prefs.putUChar("pal", palette);
     prefs.putUChar("fskip", fskip);
     prefs.putUChar("bright", brightness);
     prefs.putBool("ov_fps", show_fps);
     prefs.putBool("ov_save", show_save_overlay);
-    prefs.putUChar("morse_spd", morse_speed);
     prefs.end();
 }
 
 bool touch_load_settings(uint8_t* palette, uint8_t* fskip, uint8_t* brightness,
-                         bool* show_fps, bool* show_save_overlay, uint8_t* morse_speed) {
+                         bool* show_fps, bool* show_save_overlay) {
     prefs.begin("settings", true);
     bool has = prefs.isKey("pal");
     if (has) {
@@ -111,7 +110,6 @@ bool touch_load_settings(uint8_t* palette, uint8_t* fskip, uint8_t* brightness,
         *brightness = prefs.getUChar("bright", 255);
         if (show_fps) *show_fps = prefs.getBool("ov_fps", false);
         if (show_save_overlay) *show_save_overlay = prefs.getBool("ov_save", false);
-        if (morse_speed) *morse_speed = prefs.getUChar("morse_spd", 50);
     }
     prefs.end();
     return has;
