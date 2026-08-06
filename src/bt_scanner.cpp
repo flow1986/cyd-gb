@@ -26,11 +26,14 @@ static constexpr uint16_t COLOR_FOOTER_BG = 0x18C3;
 static constexpr uint16_t COLOR_FOOTER_TEXT = 0x7BEF;
 
 static constexpr unsigned long BT_SCAN_INTERVAL_MS = 1800;
-static constexpr unsigned long MORSE_UNIT_MS = 220;
+static constexpr unsigned long MORSE_BASE_UNIT_MS = 220;
 static constexpr unsigned long MORSE_PREP_DELAY_MS = 1800;
 static constexpr unsigned long MORSE_REPEAT_GAP_MS = 1200;
 static constexpr uint8_t MORSE_WORD_MAX_LEN = 12;
 static constexpr unsigned long SETTINGS_LONGPRESS_MS = 900;
+static constexpr uint8_t MORSE_DEFAULT_SPEED_PERCENT = 50;
+static constexpr uint8_t MORSE_MIN_SPEED_PERCENT = 10;
+static constexpr uint8_t MORSE_MAX_SPEED_PERCENT = 100;
 
 struct BeaconStation {
     char name[24];
@@ -133,6 +136,7 @@ static bool needsScan = true;
 static uint16_t lastButtons = 0;
 static bool touchPressed = false;
 static bool touchLongHandled = false;
+static bool ignoreTouchUntilRelease = false;
 static unsigned long touchPressStartMs = 0;
 static uint16_t touchPressX = 0;
 static uint16_t touchPressY = 0;
@@ -165,6 +169,21 @@ static bool read_touch(uint16_t* x, uint16_t* y) {
     *x = (uint16_t)tx;
     *y = (uint16_t)ty;
     return true;
+}
+
+static void reset_touch_gesture_state() {
+    touchPressed = false;
+    touchLongHandled = false;
+}
+
+static void block_touch_until_release() {
+    ignoreTouchUntilRelease = true;
+    reset_touch_gesture_state();
+}
+
+static void wait_for_button_release() {
+    while (read_buttons() != 0) delay(20);
+    delay(40);
 }
 
 static uint16_t rssi_to_color(int rssi) {
@@ -534,6 +553,25 @@ static uint8_t load_configured_backlight_level() {
     return brightness;
 }
 
+static uint8_t load_configured_morse_speed_percent() {
+    uint8_t palette = 0;
+    uint8_t frameSkip = 0;
+    uint8_t brightness = 255;
+    uint8_t morseSpeed = MORSE_DEFAULT_SPEED_PERCENT;
+    (void)touch_load_settings(&palette, &frameSkip, &brightness, nullptr, nullptr, &morseSpeed);
+    return constrain(morseSpeed, MORSE_MIN_SPEED_PERCENT, MORSE_MAX_SPEED_PERCENT);
+}
+
+static unsigned long morse_unit_ms() {
+    uint8_t morseSpeed = load_configured_morse_speed_percent();
+    return max(1UL, (MORSE_BASE_UNIT_MS * 100UL) / morseSpeed);
+}
+
+static unsigned long morse_scaled_ms(unsigned long baseMs) {
+    uint8_t morseSpeed = load_configured_morse_speed_percent();
+    return max(1UL, (baseMs * 100UL) / morseSpeed);
+}
+
 static void run_ldr_calibration_preview() {
     wait_for_touch_release();
 
@@ -580,9 +618,6 @@ static void show_pre_calibration_wait_screen() {
 }
 
 static bool morse_stop_requested() {
-    uint16_t x = 0;
-    uint16_t y = 0;
-    if (read_touch(&x, &y)) return true;
     uint16_t buttons = read_buttons();
     return (buttons & GB_BTN_B) != 0;
 }
@@ -598,18 +633,37 @@ static bool morse_wait_cancelable(unsigned long durationMs) {
 
 static bool morse_transmit_pulse(uint8_t onUnits, uint8_t offUnits) {
     tft.fillScreen(TFT_WHITE);
-    if (!morse_wait_cancelable(MORSE_UNIT_MS * onUnits)) return false;
+    if (!morse_wait_cancelable(morse_unit_ms() * onUnits)) return false;
 
     tft.fillScreen(TFT_BLACK);
     if (offUnits == 0) return true;
-    return morse_wait_cancelable(MORSE_UNIT_MS * offUnits);
+    return morse_wait_cancelable(morse_unit_ms() * offUnits);
+}
+
+static bool transmit_morse_calibration_pattern() {
+    for (int cycle = 0; cycle < 2; ++cycle) {
+        for (int i = 0; i < 3; ++i) {
+            if (!morse_transmit_pulse(1, 1)) return false;
+        }
+        if (!morse_wait_cancelable(morse_unit_ms() * 3)) return false;
+
+        for (int i = 0; i < 3; ++i) {
+            if (!morse_transmit_pulse(3, 1)) return false;
+        }
+
+        if (cycle == 0 && !morse_wait_cancelable(morse_unit_ms() * 3)) return false;
+    }
+
+    return morse_wait_cancelable(morse_unit_ms() * 5);
 }
 
 static bool transmit_morse_frame(const char* word) {
     for (int i = 0; i < 5; ++i) {
         if (!morse_transmit_pulse(1, 1)) return false;
     }
-    if (!morse_wait_cancelable(MORSE_UNIT_MS * 5)) return false;
+    if (!morse_wait_cancelable(morse_unit_ms() * 5)) return false;
+
+    if (!transmit_morse_calibration_pattern()) return false;
 
     size_t wordLen = strlen(word);
     for (size_t i = 0; i < wordLen; ++i) {
@@ -619,10 +673,10 @@ static bool transmit_morse_frame(const char* word) {
         for (size_t j = 0; j < codeLen; ++j) {
             if (!morse_transmit_pulse(code[j] == '.' ? 1 : 3, 1)) return false;
         }
-        if (i + 1 < wordLen && !morse_wait_cancelable(MORSE_UNIT_MS * 2)) return false;
+        if (i + 1 < wordLen && !morse_wait_cancelable(morse_unit_ms() * 2)) return false;
     }
 
-    if (!morse_wait_cancelable(MORSE_UNIT_MS * 5)) return false;
+    if (!morse_wait_cancelable(morse_unit_ms() * 5)) return false;
 
     for (int i = 0; i < 5; ++i) {
         if (!morse_transmit_pulse(5, 1)) return false;
@@ -641,7 +695,8 @@ static void run_morse_sender() {
         return;
     }
 
-    wait_for_touch_release();
+    block_touch_until_release();
+    wait_for_button_release();
 
     tft.fillScreen(TFT_BLACK);
     draw_header("Morse Sender");
@@ -649,21 +704,34 @@ static void run_morse_sender() {
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.drawString("Geraete positionieren", SCREEN_WIDTH / 2, 112, 2);
     tft.drawString(word, SCREEN_WIDTH / 2, 146, 4);
-    tft.drawString("Touch oder B stoppt", SCREEN_WIDTH / 2, 194, 2);
+    tft.drawString("Touch ist deaktiviert", SCREEN_WIDTH / 2, 188, 2);
+    tft.drawString("B startet und stoppt", SCREEN_WIDTH / 2, 212, 2);
+    draw_footer("Mit B fortfahren");
+
+    while ((read_buttons() & GB_BTN_B) == 0) delay(20);
+    wait_for_button_release();
+
+    tft.fillScreen(TFT_BLACK);
+    draw_header("Morse Sender");
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawString("Kalibrierung + Sendung", SCREEN_WIDTH / 2, 112, 2);
+    tft.drawString(word, SCREEN_WIDTH / 2, 146, 4);
+    tft.drawString("Nur B stoppt", SCREEN_WIDTH / 2, 194, 2);
     draw_footer("Start in 2 Sekunden");
 
     if (!morse_wait_cancelable(MORSE_PREP_DELAY_MS)) {
-        wait_for_touch_release();
+        block_touch_until_release();
         draw_morse_menu_screen();
         return;
     }
 
     while (true) {
         if (!transmit_morse_frame(word)) break;
-        if (!morse_wait_cancelable(MORSE_REPEAT_GAP_MS)) break;
+        if (!morse_wait_cancelable(morse_scaled_ms(MORSE_REPEAT_GAP_MS))) break;
     }
 
-    wait_for_touch_release();
+    block_touch_until_release();
     draw_morse_menu_screen();
 }
 
@@ -1042,7 +1110,12 @@ bool bt_scanner_loop() {
     uint16_t x = 0;
     uint16_t y = 0;
     bool touching = read_touch(&x, &y);
-    if (touching) {
+    if (ignoreTouchUntilRelease) {
+        if (!touching) {
+            ignoreTouchUntilRelease = false;
+            reset_touch_gesture_state();
+        }
+    } else if (touching) {
         if (!touchPressed) {
             touchPressed = true;
             touchLongHandled = false;

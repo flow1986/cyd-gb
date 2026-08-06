@@ -190,10 +190,12 @@ void launcher_settings_menu(bool* show_fps_overlay, bool* show_save_overlay) {
 	uint8_t pal = emu_get_palette();
 	uint8_t fs = emu_get_frame_skip();
 	uint8_t bl = 255; // brightness
+	uint8_t morse_speed = 50;
 	(void)show_fps_overlay;
 	(void)show_save_overlay;
+	(void)touch_load_settings(&pal, &fs, &bl, nullptr, nullptr, &morse_speed);
 
-	// Selected row: 0=palette,1=frameskip,2=brightness,3=done
+	// Selected row: 0=palette,1=frameskip,2=brightness,3=morse speed,4=done
 	int sel = 0;
 	uint16_t prev = 0;
 
@@ -240,11 +242,22 @@ void launcher_settings_menu(bool* show_fps_overlay, bool* show_save_overlay) {
 		tft.setTextDatum(ML_DATUM); tft.drawString("<",arrow_l,189,2);
 		tft.setTextDatum(MR_DATUM); tft.drawString(">",arrow_r,189,2);
 
+		// Morse speed
+		tft.setTextDatum(MC_DATUM);
+		tft.setTextColor(TFT_WHITE); tft.drawString("Morse Speed:",SCREEN_W/2,215,2);
+		uint16_t msbg = (selrow==3)?0x2945:0x1082;
+		tft.fillRoundRect(row_x,230,row_w,28,5,msbg);
+		char mss[16]; snprintf(mss,16,"%u%%",morse_speed);
+		tft.setTextColor(0x07E0,msbg); tft.drawString(mss,SCREEN_W/2,244,2);
+		tft.setTextColor(0x7BEF,msbg);
+		tft.setTextDatum(ML_DATUM); tft.drawString("<",arrow_l,244,2);
+		tft.setTextDatum(MR_DATUM); tft.drawString(">",arrow_r,244,2);
+
 		// Done button
-		uint16_t donebg = (selrow==3)?0x2945:0x07E0;
-		tft.fillRoundRect(100,302,120,16,5,donebg);
+		uint16_t donebg = (selrow==4)?0x2945:0x07E0;
+		tft.fillRoundRect(100,286,120,18,5,donebg);
 		tft.setTextColor(TFT_BLACK,donebg); tft.setTextDatum(MC_DATUM);
-		tft.drawString("DONE",SCREEN_W/2,310,1);
+		tft.drawString("DONE",SCREEN_W/2,295,1);
 	};
 
 	draw_settings(sel);
@@ -254,8 +267,8 @@ void launcher_settings_menu(bool* show_fps_overlay, bool* show_save_overlay) {
 		button_update();
 		uint16_t b = button_get_buttons();
 		// Navigation: up/down change selected row (edge detect)
-		if ((b & GB_BTN_UP) && !(prev & GB_BTN_UP)) { sel = (sel==0)?3:sel-1; draw_settings(sel); }
-		if ((b & GB_BTN_DOWN) && !(prev & GB_BTN_DOWN)) { sel = (sel+1)%4; draw_settings(sel); }
+		if ((b & GB_BTN_UP) && !(prev & GB_BTN_UP)) { sel = (sel==0)?4:sel-1; draw_settings(sel); }
+		if ((b & GB_BTN_DOWN) && !(prev & GB_BTN_DOWN)) { sel = (sel+1)%5; draw_settings(sel); }
 
 		// Row actions (use edge detection where appropriate)
 		if (sel==0) {
@@ -268,17 +281,20 @@ void launcher_settings_menu(bool* show_fps_overlay, bool* show_save_overlay) {
 			if ((b & GB_BTN_LEFT) && !(prev & GB_BTN_LEFT)) { if (bl>30) { bl-=25; display_set_backlight(bl); draw_settings(sel); } }
 			if ((b & GB_BTN_RIGHT) && !(prev & GB_BTN_RIGHT)) { if (bl<255) { bl=min(255,bl+25); display_set_backlight(bl); draw_settings(sel); } }
 		} else if (sel==3) {
+			if ((b & GB_BTN_LEFT) && !(prev & GB_BTN_LEFT)) { if (morse_speed>10) { morse_speed-=10; draw_settings(sel); } }
+			if ((b & GB_BTN_RIGHT) && !(prev & GB_BTN_RIGHT)) { if (morse_speed<100) { morse_speed=min<uint8_t>(100, morse_speed+10); draw_settings(sel); } }
+		} else if (sel==4) {
 			if ((b & GB_BTN_A) && !(prev & GB_BTN_A)) {
-				touch_save_settings(pal, fs, bl, false, false);
+				touch_save_settings(pal, fs, bl, false, false, morse_speed);
 				wait_release();
 				return;
 			}
 		}
 
 		// A anywhere acts as confirm for done as well
-		if ((b & GB_BTN_A) && !(prev & GB_BTN_A) && sel>=0 && sel<=2) {
+		if ((b & GB_BTN_A) && !(prev & GB_BTN_A) && sel>=0 && sel<=3) {
 			// if not on DONE, treat A as toggle to next row (optional)
-			sel = (sel+1)%4; draw_settings(sel);
+			sel = (sel+1)%5; draw_settings(sel);
 		}
 
 		prev = b;
