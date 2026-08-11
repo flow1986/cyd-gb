@@ -780,74 +780,88 @@ static bool run_fake_morse_activity() {
     return true;
 }
 
-static bool send_password_via_ble(const char* payload, char* errorText, size_t errorTextLen) {
+static bool send_password_via_ble(const char* targetMac, const char* payload, char* errorText, size_t errorTextLen) {
     init_ble_scanner();
     if (bleScan == nullptr) {
         snprintf(errorText, errorTextLen, "BLE nicht bereit");
         return false;
     }
 
+    if (targetMac == nullptr || targetMac[0] == 0) {
+        snprintf(errorText, errorTextLen, "MAC leer");
+        return false;
+    }
+
+    String target = String(targetMac);
+    target.toUpperCase();
+    Serial.printf("[BT-SEND] target=%s payload=%s\n", target.c_str(), payload);
+
     BLEUUID serviceUuid(kBleServiceUuid);
-    BLEAdvertisedDevice* bestDevice = nullptr;
-    int bestRssi = -127;
+    BLEAdvertisedDevice* targetDevice = nullptr;
 
     BLEScanResults results = bleScan->start(4, false);
     int deviceCount = results.getCount();
     for (int i = 0; i < deviceCount; ++i) {
         BLEAdvertisedDevice device = results.getDevice(i);
-        if (!device.haveServiceUUID()) continue;
-        if (!device.isAdvertisingService(serviceUuid)) continue;
-        if (device.getRSSI() > bestRssi) {
-            bestRssi = device.getRSSI();
-            bestDevice = new BLEAdvertisedDevice(device);
-        }
+        String foundMac = String(device.getAddress().toString().c_str());
+        foundMac.toUpperCase();
+        if (foundMac != target) continue;
+        targetDevice = new BLEAdvertisedDevice(device);
+        Serial.printf("[BT-SEND] matched MAC=%s RSSI=%d\n", foundMac.c_str(), device.getRSSI());
+        break;
     }
     bleScan->clearResults();
 
-    if (bestDevice == nullptr) {
+    if (targetDevice == nullptr) {
         snprintf(errorText, errorTextLen, "Beacon nicht gefunden");
+        Serial.println("[BT-SEND] target MAC not found in scan");
         return false;
     }
 
     BLEClient* client = BLEDevice::createClient();
     if (client == nullptr) {
-        delete bestDevice;
+        delete targetDevice;
         snprintf(errorText, errorTextLen, "Client Fehler");
         return false;
     }
 
     bool success = false;
     do {
-        if (!client->connect(bestDevice)) {
+        if (!client->connect(targetDevice)) {
             snprintf(errorText, errorTextLen, "Connect fehlgeschlagen");
+            Serial.println("[BT-SEND] connect failed");
             break;
         }
 
         BLERemoteService* service = client->getService(serviceUuid);
         if (service == nullptr) {
             snprintf(errorText, errorTextLen, "Service fehlt");
+            Serial.println("[BT-SEND] service uuid missing on target");
             break;
         }
 
         BLERemoteCharacteristic* passwordChar = service->getCharacteristic(BLEUUID(kBlePasswordCharUuid));
         if (passwordChar == nullptr) {
             snprintf(errorText, errorTextLen, "Characteristic fehlt");
+            Serial.println("[BT-SEND] password characteristic missing");
             break;
         }
 
         if (!passwordChar->canWrite() && !passwordChar->canWriteNoResponse()) {
             snprintf(errorText, errorTextLen, "Write nicht erlaubt");
+            Serial.println("[BT-SEND] characteristic not writable");
             break;
         }
 
         bool useResponse = passwordChar->canWrite();
         passwordChar->writeValue((uint8_t*)payload, strlen(payload), useResponse);
+        Serial.printf("[BT-SEND] write ok (response=%d)\n", (int)useResponse);
         success = true;
     } while (false);
 
     if (client->isConnected()) client->disconnect();
     delete client;
-    delete bestDevice;
+    delete targetDevice;
 
     return success;
 }
@@ -903,7 +917,7 @@ static void run_morse_sender() {
     snprintf(payload, sizeof(payload), "%u|%s", scannerId, word);
 
     char errorText[40] = {0};
-    bool sent = send_password_via_ble(payload, errorText, sizeof(errorText));
+    bool sent = send_password_via_ble(stations[selectedStationIndex].mac, payload, errorText, sizeof(errorText));
 
     tft.fillScreen(COLOR_BG);
     draw_header(sent ? "Morse Gesendet" : "Morse Fehler");
