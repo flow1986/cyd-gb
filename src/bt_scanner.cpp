@@ -673,10 +673,17 @@ static bool morse_stop_requested() {
     return (buttons & GB_BTN_B) != 0;
 }
 
+static bool morse_cancel_requested() {
+    if (morse_stop_requested()) return true;
+    uint16_t x = 0;
+    uint16_t y = 0;
+    return read_touch(&x, &y);
+}
+
 static bool morse_wait_cancelable(unsigned long durationMs) {
     unsigned long startMs = millis();
     while (millis() - startMs < durationMs) {
-        if (morse_stop_requested()) return false;
+        if (morse_cancel_requested()) return false;
         delay(10);
     }
     return true;
@@ -770,7 +777,7 @@ static bool run_fake_morse_activity() {
     unsigned long pulseMs = max(80UL, morse_unit_ms());
 
     while (millis() - startMs < MORSE_FAKE_ACTIVITY_MS) {
-        if (morse_stop_requested()) return false;
+        if (morse_cancel_requested()) return false;
         tft.fillScreen(white ? TFT_WHITE : TFT_BLACK);
         white = !white;
         if (!morse_wait_cancelable(pulseMs)) return false;
@@ -876,8 +883,7 @@ static void run_morse_sender() {
         return;
     }
 
-    block_touch_until_release();
-    wait_for_button_release();
+    wait_for_touch_release();
 
     tft.fillScreen(TFT_BLACK);
     draw_header("Morse Sender");
@@ -885,12 +891,15 @@ static void run_morse_sender() {
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.drawString("Geraete positionieren", SCREEN_WIDTH / 2, 112, 2);
     tft.drawString(word, SCREEN_WIDTH / 2, 146, 4);
-    tft.drawString("Touch ist deaktiviert", SCREEN_WIDTH / 2, 188, 2);
-    tft.drawString("B startet und stoppt", SCREEN_WIDTH / 2, 212, 2);
-    draw_footer("Mit B fortfahren");
+    tft.drawString("Touch und B sind aktiv", SCREEN_WIDTH / 2, 188, 2);
+    tft.drawString("Tippen/B = Abbruch", SCREEN_WIDTH / 2, 212, 2);
+    draw_footer("Start in 2 Sekunden");
 
-    while ((read_buttons() & GB_BTN_B) == 0) delay(20);
-    wait_for_button_release();
+    if (!morse_wait_cancelable(MORSE_PREP_DELAY_MS)) {
+        wait_for_touch_release();
+        draw_morse_menu_screen();
+        return;
+    }
 
     tft.fillScreen(TFT_BLACK);
     draw_header("Morse Sender");
@@ -898,17 +907,11 @@ static void run_morse_sender() {
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.drawString("Kalibrierung + Sendung", SCREEN_WIDTH / 2, 112, 2);
     tft.drawString(word, SCREEN_WIDTH / 2, 146, 4);
-    tft.drawString("Nur B stoppt", SCREEN_WIDTH / 2, 194, 2);
-    draw_footer("Start in 2 Sekunden");
-
-    if (!morse_wait_cancelable(MORSE_PREP_DELAY_MS)) {
-        block_touch_until_release();
-        draw_morse_menu_screen();
-        return;
-    }
+    tft.drawString("Tippen/B = Abbruch", SCREEN_WIDTH / 2, 194, 2);
+    draw_footer("Sende BLE-Paket...");
 
     if (!run_fake_morse_activity()) {
-        block_touch_until_release();
+        wait_for_touch_release();
         draw_morse_menu_screen();
         return;
     }
@@ -931,11 +934,11 @@ static void run_morse_sender() {
 
     unsigned long resultStart = millis();
     while (millis() - resultStart < 2000) {
-        if (morse_stop_requested()) break;
+        if (morse_cancel_requested()) break;
         delay(20);
     }
 
-    block_touch_until_release();
+    wait_for_touch_release();
     draw_morse_menu_screen();
 }
 
