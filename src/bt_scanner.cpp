@@ -1179,6 +1179,20 @@ static bool touch_tap(uint16_t x, uint16_t y) {
             }
             break;
         case VIEW_MORSE_MENU:
+            for (int i = 0; i < 3; ++i) {
+                int top = 126 + (i * 48);
+                if (x >= 12 && x <= SCREEN_WIDTH - 12 && y >= top && y <= top + 38) {
+                    selectedMorseChoice = i;
+                    if (i == 0) {
+                        enter_morse_editor();
+                    } else if (i == 1) {
+                        run_morse_sender();
+                    } else {
+                        enter_monitor();
+                    }
+                    return true;
+                }
+            }
             break;
         case VIEW_EDIT_NAME:
         case VIEW_EDIT_MAC:

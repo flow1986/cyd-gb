@@ -126,10 +126,10 @@ CYD has no PSRAM (only 320KB RAM), so a 1MB ROM can't fit in memory. CYD-GB solv
 | Compile error about peanut_gb.h | Download it (see step 3 above) |
 | Files won't compile | Make sure .cpp files are in `src/` and .h files in `include/` |
 
-## External Beacon/Morse Reference Project
+## Local Beacon/Morse Project
 
-For BLE debugging, this workspace can also build the reference project in
-`.external/fake-cyd-beacon-scanner` (receiver + sender) from the same repo context.
+For BLE debugging, this workspace includes a local copy in
+`beacon-local/` so both projects can be edited from one repo.
 
 Build commands:
 
@@ -137,17 +137,15 @@ Build commands:
 # Main project
 pio run -e cyd
 
-# External beacon project (current env)
-pio run -d .external/fake-cyd-beacon-scanner -e esp32dev_sender
+# Beacon project (separate compile)
+pio run -d beacon-local -e esp32dev_sender
 
 # Combined build sequence
-./scripts/build_all_with_external.sh
+./scripts/build_both_local.sh
 ```
 
 After the combined build, the newest `gbscanner-*.bin` and `btsend-*.bin` are
 copied automatically into the project root (`cyd-gb/`).
-
-Note: the external folder is a nested git repo with its own history and build artifacts.
 
 ## Credits
 

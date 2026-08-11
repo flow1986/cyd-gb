@@ -1,0 +1,8 @@
+# PlatformIO artifacts
+.pio/
+build/
+
+# Timestamp firmware artifacts
+btsend-*.bin
+btscan-*.bin
+guitest-*.bin

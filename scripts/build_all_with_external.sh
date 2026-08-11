@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXTERNAL_DIR="$ROOT_DIR/.external/fake-cyd-beacon-scanner"
+EXTERNAL_DIR="$ROOT_DIR/beacon-local"
 
 if [[ ! -f "$EXTERNAL_DIR/platformio.ini" ]]; then
-    echo "[ERROR] External project not found: $EXTERNAL_DIR" >&2
+    echo "[ERROR] Local beacon project not found: $EXTERNAL_DIR" >&2
     exit 1
 fi
 
