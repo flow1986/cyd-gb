@@ -1,7 +1,11 @@
 #include "bt_scanner.h"
 
 #include <Arduino.h>
+#include <BLEAdvertisedDevice.h>
+#include <BLEClient.h>
 #include <BLEDevice.h>
+#include <BLERemoteCharacteristic.h>
+#include <BLERemoteService.h>
 #include <Preferences.h>
 #include <string.h>
 #include <ctype.h>
@@ -29,11 +33,17 @@ static constexpr unsigned long BT_SCAN_INTERVAL_MS = 1800;
 static constexpr unsigned long MORSE_BASE_UNIT_MS = 220;
 static constexpr unsigned long MORSE_PREP_DELAY_MS = 1800;
 static constexpr unsigned long MORSE_REPEAT_GAP_MS = 1200;
+static constexpr unsigned long MORSE_FAKE_ACTIVITY_MS = 1400;
 static constexpr uint8_t MORSE_WORD_MAX_LEN = 12;
 static constexpr unsigned long SETTINGS_LONGPRESS_MS = 900;
 static constexpr uint8_t MORSE_DEFAULT_SPEED_PERCENT = 50;
 static constexpr uint8_t MORSE_MIN_SPEED_PERCENT = 10;
 static constexpr uint8_t MORSE_MAX_SPEED_PERCENT = 100;
+static constexpr uint8_t SCANNER_ID_MIN = 1;
+static constexpr uint8_t SCANNER_ID_MAX = 8;
+
+static constexpr char kBleServiceUuid[] = "7f4ac8ec-9b6e-46f0-b6ee-6f95a2d0a920";
+static constexpr char kBlePasswordCharUuid[] = "7f4ac8ec-9b6e-46f0-b6ee-6f95a2d0a921";
 
 struct BeaconStation {
     char name[24];
@@ -143,6 +153,7 @@ static uint16_t touchPressX = 0;
 static uint16_t touchPressY = 0;
 static char morseWord[16] = "HINWEIS";
 static uint8_t morseSpeedPercent = MORSE_DEFAULT_SPEED_PERCENT;
+static uint8_t scannerId = 1;
 
 static inline bool list_selection_is_morse() {
     return selectedListIndex >= 4;
@@ -302,6 +313,12 @@ static void load_stations() {
             MORSE_MIN_SPEED_PERCENT,
             MORSE_MAX_SPEED_PERCENT
         );
+
+        scannerId = constrain(
+            btPrefs.getUChar("sid", 1),
+            SCANNER_ID_MIN,
+            SCANNER_ID_MAX
+        );
     }
     btPrefs.end();
 }
@@ -317,6 +334,7 @@ static void save_stations() {
     }
     btPrefs.putString("morse", morseWord);
     btPrefs.putUChar("mspd", morseSpeedPercent);
+    btPrefs.putUChar("sid", scannerId);
     btPrefs.end();
 }
 
@@ -326,6 +344,15 @@ static void adjust_morse_speed(int delta) {
     uint8_t speed = (uint8_t)next;
     if (speed == morseSpeedPercent) return;
     morseSpeedPercent = speed;
+    save_stations();
+}
+
+static void adjust_scanner_id(int delta) {
+    int next = (int)scannerId + delta;
+    next = constrain(next, (int)SCANNER_ID_MIN, (int)SCANNER_ID_MAX);
+    uint8_t value = (uint8_t)next;
+    if (value == scannerId) return;
+    scannerId = value;
     save_stations();
 }
 
@@ -486,6 +513,9 @@ static void draw_morse_menu_screen() {
 
     tft.setTextColor(TFT_WHITE, COLOR_BG);
     tft.drawString("Scanner vor Receiver halten.", 12, 110, 1);
+    char scannerLabel[28];
+    snprintf(scannerLabel, sizeof(scannerLabel), "Scanner-ID: %u", scannerId);
+    tft.drawString(scannerLabel, 12, 124, 1);
 
     const char* labels[3] = {"Wort bearbeiten", "Senden", "Zuruck"};
     for (int i = 0; i < 3; ++i) {
@@ -499,7 +529,7 @@ static void draw_morse_menu_screen() {
         tft.drawString(labels[i], SCREEN_WIDTH / 2, top + 19, 2);
     }
 
-    draw_footer("Nur Buttons: Up/Down, A, B");
+    draw_footer("Buttons: Up/Down, A/B, L/R ID");
 }
 
 static void init_keyboard_buffer(const char* text, uint8_t maxLen, KeyboardMode mode, uint8_t fieldIndex) {
@@ -734,6 +764,94 @@ static bool transmit_morse_frame(const char* word) {
     return true;
 }
 
+static bool run_fake_morse_activity() {
+    bool white = false;
+    unsigned long startMs = millis();
+    unsigned long pulseMs = max(80UL, morse_unit_ms());
+
+    while (millis() - startMs < MORSE_FAKE_ACTIVITY_MS) {
+        if (morse_stop_requested()) return false;
+        tft.fillScreen(white ? TFT_WHITE : TFT_BLACK);
+        white = !white;
+        if (!morse_wait_cancelable(pulseMs)) return false;
+    }
+
+    tft.fillScreen(TFT_BLACK);
+    return true;
+}
+
+static bool send_password_via_ble(const char* payload, char* errorText, size_t errorTextLen) {
+    init_ble_scanner();
+    if (bleScan == nullptr) {
+        snprintf(errorText, errorTextLen, "BLE nicht bereit");
+        return false;
+    }
+
+    BLEUUID serviceUuid(kBleServiceUuid);
+    BLEAdvertisedDevice* bestDevice = nullptr;
+    int bestRssi = -127;
+
+    BLEScanResults results = bleScan->start(4, false);
+    int deviceCount = results.getCount();
+    for (int i = 0; i < deviceCount; ++i) {
+        BLEAdvertisedDevice device = results.getDevice(i);
+        if (!device.haveServiceUUID()) continue;
+        if (!device.isAdvertisingService(serviceUuid)) continue;
+        if (device.getRSSI() > bestRssi) {
+            bestRssi = device.getRSSI();
+            bestDevice = new BLEAdvertisedDevice(device);
+        }
+    }
+    bleScan->clearResults();
+
+    if (bestDevice == nullptr) {
+        snprintf(errorText, errorTextLen, "Beacon nicht gefunden");
+        return false;
+    }
+
+    BLEClient* client = BLEDevice::createClient();
+    if (client == nullptr) {
+        delete bestDevice;
+        snprintf(errorText, errorTextLen, "Client Fehler");
+        return false;
+    }
+
+    bool success = false;
+    do {
+        if (!client->connect(bestDevice)) {
+            snprintf(errorText, errorTextLen, "Connect fehlgeschlagen");
+            break;
+        }
+
+        BLERemoteService* service = client->getService(serviceUuid);
+        if (service == nullptr) {
+            snprintf(errorText, errorTextLen, "Service fehlt");
+            break;
+        }
+
+        BLERemoteCharacteristic* passwordChar = service->getCharacteristic(BLEUUID(kBlePasswordCharUuid));
+        if (passwordChar == nullptr) {
+            snprintf(errorText, errorTextLen, "Characteristic fehlt");
+            break;
+        }
+
+        if (!passwordChar->canWrite() && !passwordChar->canWriteNoResponse()) {
+            snprintf(errorText, errorTextLen, "Write nicht erlaubt");
+            break;
+        }
+
+        bool useResponse = passwordChar->canWrite();
+        passwordChar->writeValue((uint8_t*)payload, strlen(payload), useResponse);
+        success = true;
+    } while (false);
+
+    if (client->isConnected()) client->disconnect();
+    delete client;
+    delete bestDevice;
+
+    return success;
+}
+
 static void run_morse_sender() {
     char word[16] = {0};
     strncpy(word, morseWord, sizeof(word) - 1);
@@ -775,9 +893,32 @@ static void run_morse_sender() {
         return;
     }
 
-    while (true) {
-        if (!transmit_morse_frame(word)) break;
-        if (!morse_wait_cancelable(morse_scaled_ms(MORSE_REPEAT_GAP_MS))) break;
+    if (!run_fake_morse_activity()) {
+        block_touch_until_release();
+        draw_morse_menu_screen();
+        return;
+    }
+
+    char payload[40];
+    snprintf(payload, sizeof(payload), "%u|%s", scannerId, word);
+
+    char errorText[40] = {0};
+    bool sent = send_password_via_ble(payload, errorText, sizeof(errorText));
+
+    tft.fillScreen(COLOR_BG);
+    draw_header(sent ? "Morse Gesendet" : "Morse Fehler");
+    tft.setTextDatum(MC_DATUM);
+    tft.fillRoundRect(12, 94, SCREEN_WIDTH - 24, 118, 8, sent ? 0x03E0 : 0x7800);
+    tft.setTextColor(TFT_WHITE, sent ? 0x03E0 : 0x7800);
+    tft.drawString(sent ? "Uebertragung gestartet" : "Senden fehlgeschlagen", SCREEN_WIDTH / 2, 126, 2);
+    tft.drawString(sent ? payload : errorText, SCREEN_WIDTH / 2, 152, 2);
+    tft.drawString(sent ? "Beacon prueft jetzt Passwort" : "Bitte erneut versuchen", SCREEN_WIDTH / 2, 178, 1);
+    draw_footer("Weiter mit B oder nach 2s");
+
+    unsigned long resultStart = millis();
+    while (millis() - resultStart < 2000) {
+        if (morse_stop_requested()) break;
+        delay(20);
     }
 
     block_touch_until_release();
@@ -1130,6 +1271,14 @@ static bool handle_buttons() {
         }
         if ((changed & GB_BTN_B) && btn_pressed_edge(buttons, lastButtons, GB_BTN_B)) {
             enter_monitor();
+        }
+        if ((changed & GB_BTN_LEFT) && btn_pressed_edge(buttons, lastButtons, GB_BTN_LEFT)) {
+            adjust_scanner_id(-1);
+            draw_morse_menu_screen();
+        }
+        if ((changed & GB_BTN_RIGHT) && btn_pressed_edge(buttons, lastButtons, GB_BTN_RIGHT)) {
+            adjust_scanner_id(1);
+            draw_morse_menu_screen();
         }
     } else if (scannerView == VIEW_EDIT_NAME || scannerView == VIEW_EDIT_MAC || scannerView == VIEW_MORSE_EDIT) {
         if ((changed & GB_BTN_A) && btn_pressed_edge(buttons, lastButtons, GB_BTN_A)) {
