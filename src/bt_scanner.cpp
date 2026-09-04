@@ -1406,6 +1406,5 @@ void bt_scanner_shutdown() {
         bleScan = nullptr;
     }
 
-    // Release BLE stack memory so emulator init can reclaim heap.
-    BLEDevice::deinit(true);
+    BLEDevice::deinit(false);
 }
