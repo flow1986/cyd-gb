@@ -42,6 +42,10 @@ static constexpr uint8_t MORSE_MIN_SPEED_PERCENT = 10;
 static constexpr uint8_t MORSE_MAX_SPEED_PERCENT = 100;
 static constexpr uint8_t SCANNER_ID_MIN = 1;
 static constexpr uint8_t SCANNER_ID_MAX = 8;
+static constexpr uint8_t STATION_COUNT = 5;
+static constexpr int LIST_ROW_TOP = 42;
+static constexpr int LIST_ROW_HEIGHT = 43;
+static constexpr int LIST_ROW_SPACING = 48;
 
 static constexpr char kBleServiceUuid[] = "7f4ac8ec-9b6e-46f0-b6ee-6f95a2d0a920";
 static constexpr char kBlePasswordCharUuid[] = "7f4ac8ec-9b6e-46f0-b6ee-6f95a2d0a921";
@@ -88,6 +92,7 @@ enum ScannerView {
     VIEW_EDIT_MENU,
     VIEW_EDIT_NAME,
     VIEW_EDIT_MAC,
+    VIEW_EDIT_BRIGHTNESS,
     VIEW_MORSE_MENU,
     VIEW_MORSE_EDIT
 };
@@ -136,7 +141,7 @@ static const MorseCodeEntry kMorseTable[] = {
 
 static Preferences btPrefs;
 static BLEScan* bleScan = nullptr;
-static BeaconStation stations[4];
+static BeaconStation stations[STATION_COUNT];
 static KeyboardState keyboardState{};
 static ScannerView scannerView = VIEW_LIST;
 static int selectedStationIndex = 0;
@@ -156,15 +161,17 @@ static char morseWord[16] = "HINWEIS";
 static uint8_t morseSpeedPercent = MORSE_DEFAULT_SPEED_PERCENT;
 static char password[6] = {};
 static uint8_t scannerId = 1;
+static bool sendAfterPasswordEdit = false;
+static uint8_t backlightLevel = 255;
 
 static inline bool list_selection_is_morse() {
         char cleaned[6] = {0};
-    return selectedListIndex >= 4;
+    return selectedListIndex >= STATION_COUNT;
 }
 
 static inline void clamp_list_selection() {
     if (selectedListIndex < 0) selectedListIndex = 0;
-    if (selectedListIndex > 4) selectedListIndex = 4;
+    if (selectedListIndex >= STATION_COUNT) selectedListIndex = STATION_COUNT - 1;
 }
 
 static inline bool btn_pressed_edge(uint16_t now, uint16_t prev, uint16_t mask) {
@@ -208,6 +215,17 @@ static uint16_t rssi_to_color(int rssi) {
     uint8_t red = (uint8_t)(255 - scale);
     uint8_t green = (uint8_t)(scale);
     return tft.color565(red, green, 0);
+}
+
+static const char* rssi_to_label(int rssi) {
+    if (rssi >= -55) return "Super";
+    if (rssi >= -70) return "Gut";
+    if (rssi >= -85) return "Okay";
+    return "Schwach";
+}
+
+static int rssi_to_strength(int rssi) {
+    return map(constrain(rssi, -100, -40), -100, -40, 1, 100);
 }
 
 static void draw_header(const char* title) {
@@ -266,16 +284,9 @@ static const char* morse_code_for_char(char c) {
 }
 
 static void set_default_stations() {
-    snprintf(stations[0].name, sizeof(stations[0].name), "Station 1");
-    snprintf(stations[0].mac, sizeof(stations[0].mac), "AA:BB:CC:DD:EE:01");
-    snprintf(stations[1].name, sizeof(stations[1].name), "Station 2");
-    snprintf(stations[1].mac, sizeof(stations[1].mac), "AA:BB:CC:DD:EE:02");
-    snprintf(stations[2].name, sizeof(stations[2].name), "Station 3");
-    snprintf(stations[2].mac, sizeof(stations[2].mac), "AA:BB:CC:DD:EE:03");
-    snprintf(stations[3].name, sizeof(stations[3].name), "Station 4");
-    snprintf(stations[3].mac, sizeof(stations[3].mac), "AA:BB:CC:DD:EE:04");
-
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < STATION_COUNT; ++i) {
+        snprintf(stations[i].name, sizeof(stations[i].name), "Station %d", i + 1);
+        snprintf(stations[i].mac, sizeof(stations[i].mac), "AA:BB:CC:DD:EE:%02d", i + 1);
         stations[i].rssi = -127;
         stations[i].rssiValid = false;
     }
@@ -285,7 +296,7 @@ static void load_stations() {
     set_default_stations();
     btPrefs.begin("bt", true);
     if (btPrefs.getBool("valid", false)) {
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < STATION_COUNT; ++i) {
             String nameKey = "n" + String(i);
             String macKey = "m" + String(i);
             String nameValue = btPrefs.getString(nameKey.c_str(), stations[i].name);
@@ -322,6 +333,12 @@ static void load_stations() {
             SCANNER_ID_MIN,
             SCANNER_ID_MAX
         );
+
+        String passwordValue = btPrefs.getString("pwd", "");
+        passwordValue.trim();
+        strncpy(password, passwordValue.c_str(), sizeof(password) - 1);
+        password[sizeof(password) - 1] = 0;
+        normalize_morse_word(password);
     }
     btPrefs.end();
 }
@@ -329,7 +346,7 @@ static void load_stations() {
 static void save_stations() {
     btPrefs.begin("bt", false);
     btPrefs.putBool("valid", true);
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < STATION_COUNT; ++i) {
         String nameKey = "n" + String(i);
         String macKey = "m" + String(i);
         btPrefs.putString(nameKey.c_str(), stations[i].name);
@@ -338,6 +355,7 @@ static void save_stations() {
     btPrefs.putString("morse", morseWord);
     btPrefs.putUChar("mspd", morseSpeedPercent);
     btPrefs.putUChar("sid", scannerId);
+    btPrefs.putString("pwd", password);
     btPrefs.end();
 }
 
@@ -400,39 +418,39 @@ static void scan_selected_beacon() {
 }
 
 static void draw_list_row(int index, bool selected) {
-    int top = 46 + (index * 52);
+    int top = LIST_ROW_TOP + (index * LIST_ROW_SPACING);
     uint16_t bg = selected ? COLOR_ITEM_HL_BG : COLOR_ITEM_BG;
     uint16_t fg = selected ? COLOR_ITEM_HL_TEXT : COLOR_ITEM_TEXT;
 
-    tft.fillRoundRect(8, top, SCREEN_WIDTH - 16, 46, 6, bg);
-    tft.drawRoundRect(8, top, SCREEN_WIDTH - 16, 46, 6, selected ? COLOR_ITEM_HL_TEXT : 0x7BEF);
+    tft.fillRoundRect(8, top, SCREEN_WIDTH - 16, LIST_ROW_HEIGHT, 6, bg);
+    tft.drawRoundRect(8, top, SCREEN_WIDTH - 16, LIST_ROW_HEIGHT, 6, selected ? COLOR_ITEM_HL_TEXT : 0x7BEF);
 
     tft.setTextColor(fg, bg);
     tft.setTextDatum(ML_DATUM);
-    tft.drawString(stations[index].name, 16, top + 13, 2);
-    tft.drawString(stations[index].mac, 16, top + 30, 1);
+    tft.drawString(stations[index].name, 16, top + 12, 2);
+    tft.drawString(stations[index].mac, 16, top + 28, 1);
 
     uint16_t badgeColor = stations[index].rssiValid ? rssi_to_color(stations[index].rssi) : 0x7BEF;
-    tft.fillRoundRect(SCREEN_WIDTH - 72, top + 8, 58, 30, 4, badgeColor);
+    tft.fillRoundRect(SCREEN_WIDTH - 72, top + 7, 58, 28, 4, badgeColor);
     tft.setTextColor(TFT_BLACK, badgeColor);
     tft.setTextDatum(MC_DATUM);
     if (stations[index].rssiValid) {
         char rssiText[12];
         snprintf(rssiText, sizeof(rssiText), "%d", stations[index].rssi);
-        tft.drawString(rssiText, SCREEN_WIDTH - 43, top + 23, 2);
+        tft.drawString(rssiText, SCREEN_WIDTH - 43, top + 21, 2);
     } else {
-        tft.drawString("--", SCREEN_WIDTH - 43, top + 23, 2);
+        tft.drawString("--", SCREEN_WIDTH - 43, top + 21, 2);
     }
 }
 
 static void draw_list_screen() {
     tft.fillScreen(COLOR_BG);
     draw_header("Station waehlen");
-    for (int i = 0; i < 4; ++i) draw_list_row(i, i == selectedListIndex);
+    for (int i = 0; i < STATION_COUNT; ++i) draw_list_row(i, i == selectedListIndex);
 
     tft.setTextColor(TFT_WHITE, COLOR_BG);
     tft.setTextDatum(MC_DATUM);
-    tft.drawString("Waehle die richtige Station", SCREEN_WIDTH / 2, 278, 1);
+    tft.drawString("Waehle die richtige Station", SCREEN_WIDTH / 2, 286, 1);
     draw_footer("Hoch/Runter waehlen  A oeffnen  B zurueck");
 }
 
@@ -449,21 +467,28 @@ static void draw_monitor_screen() {
     tft.drawString(station.name, 18, 66, 2);
     tft.drawString(station.mac, 18, 92, 1);
     if (station.rssiValid) {
-        char rssiText[16];
-        snprintf(rssiText, sizeof(rssiText), "RSSI %d dBm", station.rssi);
+        char rssiText[32];
+        snprintf(rssiText, sizeof(rssiText), "Empfangsstaerke: %d (%s)",
+                 rssi_to_strength(station.rssi), rssi_to_label(station.rssi));
         tft.drawString(rssiText, 18, 124, 2);
     } else {
-        tft.drawString("No signal", 18, 124, 2);
+        tft.drawString("Kein Signal", 18, 124, 2);
     }
 
-    int barWidth = station.rssiValid ? map(constrain(station.rssi, -100, -40), -100, -40, 0, SCREEN_WIDTH - 40) : 0;
-    tft.fillRoundRect(18, 164, SCREEN_WIDTH - 36, 18, 4, TFT_DARKGREY);
-    tft.fillRoundRect(18, 164, barWidth, 18, 4, station.rssiValid ? rssi_to_color(station.rssi) : TFT_RED);
+    const int barLeft = 18;
+    const int barTop = 160;
+    const int barWidth = SCREEN_WIDTH - 36;
+    const int barHeight = 24;
+    const int fillWidth = station.rssiValid ? map(constrain(station.rssi, -100, -40), -100, -40, 0, barWidth - 8) : 0;
+    tft.fillRoundRect(barLeft, barTop, barWidth, barHeight, 5, TFT_BLACK);
+    tft.drawRoundRect(barLeft, barTop, barWidth, barHeight, 5, TFT_WHITE);
+    tft.fillRoundRect(barLeft + 4, barTop + 4, fillWidth, barHeight - 8, 3,
+                      station.rssiValid ? rssi_to_color(station.rssi) : TFT_RED);
 
     tft.fillRoundRect(8, 210, SCREEN_WIDTH - 16, 68, 8, 0x0014);
     tft.setTextColor(TFT_WHITE, 0x0014);
     tft.drawString("A = Passwort eingeben", 18, 226, 2);
-    tft.drawString("Rechts = Passwort senden", 18, 250, 1);
+    tft.drawString("Rechts = Aendern & senden", 18, 250, 1);
     tft.drawString("B = Stationen", 18, 268, 1);
     draw_footer("Codewort mit 3 Ziffern steht am Beacon");
 }
@@ -478,8 +503,8 @@ static void draw_edit_menu_screen() {
     tft.drawString(station.name, 12, 46, 2);
     tft.drawString(station.mac, 12, 72, 1);
 
-    const char* labels[3] = {"Name aendern", "Bluetooth-Adresse", "Zurueck"};
-    for (int i = 0; i < 3; ++i) {
+    const char* labels[4] = {"Name aendern", "Bluetooth-Adresse", "Display-Helligkeit", "Zurueck"};
+    for (int i = 0; i < 4; ++i) {
         int top = 78 + (i * 34);
         uint16_t bg = (i == selectedEditChoice) ? COLOR_ITEM_HL_BG : COLOR_ITEM_BG;
         uint16_t fg = (i == selectedEditChoice) ? COLOR_ITEM_HL_TEXT : COLOR_ITEM_TEXT;
@@ -491,6 +516,27 @@ static void draw_edit_menu_screen() {
     }
 
     draw_footer("Hoch/Runter, A waehlen, B zurueck");
+}
+
+static void draw_brightness_editor() {
+    tft.fillScreen(COLOR_BG);
+    draw_header("Display-Helligkeit");
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_WHITE, COLOR_BG);
+    tft.drawString("Helligkeit", SCREEN_WIDTH / 2, 86, 2);
+
+    tft.fillRoundRect(32, 108, SCREEN_WIDTH - 64, 48, 6, COLOR_ITEM_HL_BG);
+    tft.setTextColor(COLOR_ITEM_HL_TEXT, COLOR_ITEM_HL_BG);
+    char value[12];
+    snprintf(value, sizeof(value), "%u%%", (backlightLevel * 100U) / 255U);
+    tft.drawString(value, SCREEN_WIDTH / 2, 132, 4);
+
+    tft.fillRoundRect(20, 182, 88, 42, 6, COLOR_ITEM_BG);
+    tft.fillRoundRect(132, 182, 88, 42, 6, COLOR_ITEM_BG);
+    tft.setTextColor(TFT_WHITE, COLOR_ITEM_BG);
+    tft.drawString("-", 64, 203, 4);
+    tft.drawString("+", 176, 203, 4);
+    draw_footer("Links/Rechts oder Touch  A/B zurueck");
 }
 
 static void draw_morse_menu_screen() {
@@ -508,7 +554,7 @@ static void draw_morse_menu_screen() {
     tft.drawString("Genau 5 Buchstaben eingeben.", 12, 110, 1);
     tft.drawString("Dann Passwort an die Station senden.", 12, 124, 1);
 
-    const char* labels[3] = {"Passwort eingeben", "Jetzt senden", "Zurueck"};
+    const char* labels[3] = {"Passwort eingeben", "Senden", "Zurueck"};
     for (int i = 0; i < 3; ++i) {
         int top = 126 + (i * 48);
         uint16_t bg = (i == selectedMorseChoice) ? COLOR_ITEM_HL_BG : 0x0014;
@@ -598,6 +644,25 @@ static uint8_t load_configured_backlight_level() {
     uint8_t brightness = 255;
     (void)touch_load_settings(&palette, &frameSkip, &brightness, nullptr, nullptr);
     return brightness;
+}
+
+static void save_configured_backlight_level(uint8_t brightness) {
+    uint8_t palette = 0;
+    uint8_t frameSkip = 0;
+    uint8_t savedBrightness = 255;
+    bool showFps = false;
+    bool showSaveOverlay = false;
+    (void)touch_load_settings(&palette, &frameSkip, &savedBrightness, &showFps, &showSaveOverlay);
+    touch_save_settings(palette, frameSkip, brightness, showFps, showSaveOverlay);
+}
+
+static void adjust_backlight_level(int delta) {
+    int level = constrain((int)backlightLevel + delta, 30, 255);
+    if (level == backlightLevel) return;
+    backlightLevel = (uint8_t)level;
+    display_set_backlight(backlightLevel);
+    save_configured_backlight_level(backlightLevel);
+    draw_brightness_editor();
 }
 
 static uint8_t load_configured_morse_speed_percent() {
@@ -1002,8 +1067,13 @@ static bool keyboard_tap(uint16_t x, uint16_t y) {
                     case KEY_SAVE:
                         save_keyboard_buffer();
                         if (scannerView == VIEW_MORSE_EDIT) {
-                            scannerView = VIEW_MORSE_MENU;
-                            draw_morse_menu_screen();
+                            if (sendAfterPasswordEdit) {
+                                sendAfterPasswordEdit = false;
+                                run_morse_sender();
+                            } else {
+                                scannerView = VIEW_MORSE_MENU;
+                                draw_morse_menu_screen();
+                            }
                         } else {
                             scannerView = VIEW_EDIT_MENU;
                             draw_edit_menu_screen();
@@ -1057,14 +1127,24 @@ static void enter_mac_editor() {
     draw_mac_editor();
 }
 
+static void enter_brightness_editor() {
+    scannerView = VIEW_EDIT_BRIGHTNESS;
+    backlightLevel = load_configured_backlight_level();
+    display_set_backlight(backlightLevel);
+    draw_brightness_editor();
+}
+
 static void enter_morse_menu() {
     scannerView = VIEW_MORSE_MENU;
     selectedMorseChoice = 0;
+    sendAfterPasswordEdit = false;
+    needsScan = false;
     draw_morse_menu_screen();
 }
 
-static void enter_morse_editor() {
+static void enter_morse_editor(bool sendAfterEdit = false) {
     scannerView = VIEW_MORSE_EDIT;
+    sendAfterPasswordEdit = sendAfterEdit;
     init_keyboard_buffer(password, PASSWORD_LENGTH, KB_ALPHA, 2);
     draw_morse_editor();
 }
@@ -1072,9 +1152,9 @@ static void enter_morse_editor() {
 static bool touch_tap(uint16_t x, uint16_t y) {
     switch (scannerView) {
         case VIEW_LIST:
-            for (int i = 0; i < 4; ++i) {
-                int top = 46 + (i * 52);
-                if (x >= 8 && x <= SCREEN_WIDTH - 8 && y >= top && y <= top + 46) {
+            for (int i = 0; i < STATION_COUNT; ++i) {
+                int top = LIST_ROW_TOP + (i * LIST_ROW_SPACING);
+                if (x >= 8 && x <= SCREEN_WIDTH - 8 && y >= top && y <= top + LIST_ROW_HEIGHT) {
                     selectedStationIndex = i;
                     selectedListIndex = i;
                     enter_monitor();
@@ -1088,7 +1168,7 @@ static bool touch_tap(uint16_t x, uint16_t y) {
                 return true;
             }
             if (x >= 8 && x <= SCREEN_WIDTH - 8 && y >= 243 && y <= 278) {
-                run_morse_sender();
+                enter_morse_editor(true);
                 return true;
             }
             enter_list();
@@ -1106,7 +1186,23 @@ static bool touch_tap(uint16_t x, uint16_t y) {
             }
             if (y >= 146 && y <= 174) {
                 selectedEditChoice = 2;
+                enter_brightness_editor();
+                return true;
+            }
+            if (y >= 180 && y <= 208) {
+                selectedEditChoice = 3;
                 enter_list();
+                return true;
+            }
+            break;
+        case VIEW_EDIT_BRIGHTNESS:
+            if (y >= 182 && y <= 224) {
+                if (x < SCREEN_WIDTH / 2) adjust_backlight_level(-25);
+                else adjust_backlight_level(25);
+                return true;
+            }
+            if (y >= 250) {
+                enter_edit_menu();
                 return true;
             }
             break;
@@ -1146,11 +1242,11 @@ static bool handle_buttons() {
 
     if (scannerView == VIEW_LIST) {
         if ((changed & GB_BTN_UP) && btn_pressed_edge(buttons, lastButtons, GB_BTN_UP)) {
-            selectedListIndex = (selectedListIndex + 3) % 4;
+            selectedListIndex = (selectedListIndex + STATION_COUNT - 1) % STATION_COUNT;
             draw_list_screen();
         }
         if ((changed & GB_BTN_DOWN) && btn_pressed_edge(buttons, lastButtons, GB_BTN_DOWN)) {
-            selectedListIndex = (selectedListIndex + 1) % 4;
+            selectedListIndex = (selectedListIndex + 1) % STATION_COUNT;
             draw_list_screen();
         }
         if ((changed & GB_BTN_A) && btn_pressed_edge(buttons, lastButtons, GB_BTN_A)) {
@@ -1168,24 +1264,36 @@ static bool handle_buttons() {
             enter_morse_menu();
         }
         if ((changed & GB_BTN_RIGHT) && btn_pressed_edge(buttons, lastButtons, GB_BTN_RIGHT)) {
-            enter_morse_menu();
+            enter_morse_editor(true);
         }
     } else if (scannerView == VIEW_EDIT_MENU) {
         if ((changed & GB_BTN_UP) && btn_pressed_edge(buttons, lastButtons, GB_BTN_UP)) {
-            selectedEditChoice = (selectedEditChoice + 2) % 3;
+            selectedEditChoice = (selectedEditChoice + 3) % 4;
             draw_edit_menu_screen();
         }
         if ((changed & GB_BTN_DOWN) && btn_pressed_edge(buttons, lastButtons, GB_BTN_DOWN)) {
-            selectedEditChoice = (selectedEditChoice + 1) % 3;
+            selectedEditChoice = (selectedEditChoice + 1) % 4;
             draw_edit_menu_screen();
         }
         if ((changed & GB_BTN_A) && btn_pressed_edge(buttons, lastButtons, GB_BTN_A)) {
             if (selectedEditChoice == 0) enter_name_editor();
             else if (selectedEditChoice == 1) enter_mac_editor();
+            else if (selectedEditChoice == 2) enter_brightness_editor();
             else enter_list();
         }
         if ((changed & GB_BTN_B) && btn_pressed_edge(buttons, lastButtons, GB_BTN_B)) {
             enter_list();
+        }
+    } else if (scannerView == VIEW_EDIT_BRIGHTNESS) {
+        if ((changed & GB_BTN_LEFT) && btn_pressed_edge(buttons, lastButtons, GB_BTN_LEFT)) {
+            adjust_backlight_level(-25);
+        }
+        if ((changed & GB_BTN_RIGHT) && btn_pressed_edge(buttons, lastButtons, GB_BTN_RIGHT)) {
+            adjust_backlight_level(25);
+        }
+        if ((changed & (GB_BTN_A | GB_BTN_B)) &&
+            ((buttons & (GB_BTN_A | GB_BTN_B)) & ~(lastButtons & (GB_BTN_A | GB_BTN_B)))) {
+            enter_edit_menu();
         }
     } else if (scannerView == VIEW_MORSE_MENU) {
         if ((changed & GB_BTN_UP) && btn_pressed_edge(buttons, lastButtons, GB_BTN_UP)) {
@@ -1205,16 +1313,22 @@ static bool handle_buttons() {
             enter_monitor();
         }
         if ((changed & GB_BTN_RIGHT) && btn_pressed_edge(buttons, lastButtons, GB_BTN_RIGHT)) {
-            run_morse_sender();
+            enter_morse_editor(true);
         }
     } else if (scannerView == VIEW_EDIT_NAME || scannerView == VIEW_EDIT_MAC || scannerView == VIEW_MORSE_EDIT) {
         if ((changed & GB_BTN_A) && btn_pressed_edge(buttons, lastButtons, GB_BTN_A)) {
             save_keyboard_buffer();
-            if (scannerView == VIEW_MORSE_EDIT) enter_morse_menu();
+            if (scannerView == VIEW_MORSE_EDIT && sendAfterPasswordEdit) {
+                sendAfterPasswordEdit = false;
+                run_morse_sender();
+            } else if (scannerView == VIEW_MORSE_EDIT) enter_morse_menu();
             else enter_edit_menu();
         }
         if ((changed & GB_BTN_B) && btn_pressed_edge(buttons, lastButtons, GB_BTN_B)) {
-            if (scannerView == VIEW_MORSE_EDIT) enter_morse_menu();
+            if (scannerView == VIEW_MORSE_EDIT) {
+                sendAfterPasswordEdit = false;
+                enter_morse_menu();
+            }
             else enter_edit_menu();
         }
         if ((changed & GB_BTN_LEFT) && btn_pressed_edge(buttons, lastButtons, GB_BTN_LEFT)) {
@@ -1236,6 +1350,8 @@ static bool handle_buttons() {
 void bt_scanner_enter() {
     set_default_stations();
     load_stations();
+    backlightLevel = load_configured_backlight_level();
+    display_set_backlight(backlightLevel);
     init_ble_scanner();
     selectedStationIndex = 0;
     selectedListIndex = 0;
@@ -1247,7 +1363,6 @@ void bt_scanner_enter() {
     touchPressed = false;
     touchLongHandled = false;
     lastButtons = read_buttons();
-    password[0] = 0;
     draw_list_screen();
 }
 
@@ -1297,7 +1412,6 @@ bool bt_scanner_loop() {
 
 void bt_scanner_shutdown() {
     if (bleScan) {
-        bleScan->stop();
         bleScan->clearResults();
         bleScan = nullptr;
     }

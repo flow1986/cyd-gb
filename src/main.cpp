@@ -205,7 +205,7 @@ void loop() {
         tft.setTextColor(TFT_RED); tft.drawString("Open failed!",SCREEN_W/2,170,2); delay(2000); return;
     }
     if(!emu_init(0,0)){
-        tft.setTextColor(TFT_RED); tft.drawString("Init failed!",SCREEN_W/2,170,2); delay(2000); emu_close_rom(); return;
+        tft.setTextColor(TFT_RED); tft.drawString("Init failed!",SCREEN_W/2,170,2); delay(2000); emu_shutdown(); return;
     }
 
     load_ram();
@@ -213,5 +213,5 @@ void loop() {
     if (LED_G_PIN >= 0) digitalWrite(LED_G_PIN, LOW);
     run_emu();
     if (LED_G_PIN >= 0) digitalWrite(LED_G_PIN, HIGH);
-    emu_close_rom();
+    emu_shutdown();
 }

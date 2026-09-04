@@ -159,6 +159,15 @@ bool emu_open_rom(const char* path) {
 }
 void emu_close_rom(){if(romf)romf.close();romlen=0;}
 
+void emu_shutdown(){
+    emu_close_rom();
+    if(gb){free(gb);gb=nullptr;}
+    if(cram){free(cram);cram=nullptr;}
+    if(b0){free(b0);b0=nullptr;}
+    for(int i=0;i<PG_N;i++){if(pg[i].d){free(pg[i].d);pg[i].d=nullptr;}pg[i].v=false;}
+    npg=0; acc=0; cart_ram_dirty=false;
+}
+
 bool emu_init(uint8_t*,uint32_t) {
     if(!romf||!romlen) return false;
     memset(ht,-1,sizeof(ht));

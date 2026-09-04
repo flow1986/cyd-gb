@@ -140,12 +140,15 @@ pio run -e cyd
 # Beacon project (separate compile)
 pio run -d beacon-local -e esp32dev_sender
 
+# Schatzkiste mit Servo (separate compile)
+pio run -d beacon-local -e btkiste_timestamp
+
 # Combined build sequence
 ./scripts/build_both_local.sh
 ```
 
-After the combined build, the newest `gbscanner-*.bin` and `btsend-*.bin` are
-copied automatically into the project root (`cyd-gb/`).
+After the combined build, the newest `gbscanner-*.bin`, `btsend-*.bin`, and
+`btkiste-*.bin` are copied automatically into the project root (`cyd-gb/`).
 
 ## Credits
 

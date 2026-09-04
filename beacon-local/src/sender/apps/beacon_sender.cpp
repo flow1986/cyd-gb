@@ -13,6 +13,10 @@
 #include <TFT_eSPI.h>
 #include <esp_gap_ble_api.h>
 
+#if defined(BT_CHEST_BUILD)
+#include <ESP32Servo.h>
+#endif
+
 extern TFT_eSPI tft;
 extern bool touchReadScreen(uint16_t* x, uint16_t* y);
 
@@ -68,6 +72,11 @@ enum SenderView {
   VIEW_EDIT_NEXT_PASSWORD,
   VIEW_EDIT_SCANNER_ID,
   VIEW_EDIT_LDR_BUFFER_PERCENT,
+#if defined(BT_CHEST_BUILD)
+  VIEW_EDIT_SERVO_PIN,
+  VIEW_EDIT_SERVO_ANGLE_OPEN,
+  VIEW_EDIT_SERVO_ANGLE_CLOSED,
+#endif
   VIEW_LDR_CALIBRATION,
   VIEW_MORSE_READY,
   VIEW_MORSE_LISTEN,
@@ -116,6 +125,11 @@ struct SenderConfig {
   int ldrDarkRaw;
   int ldrBrightRaw;
   uint8_t ldrBufferPercent;
+#if defined(BT_CHEST_BUILD)
+  uint8_t servoPin;
+  uint8_t servoAngleOpen;
+  uint8_t servoAngleClosed;
+#endif
 };
 
 struct MorseCodeEntry {
@@ -151,6 +165,11 @@ static KeyboardState keyboardState{};
 static SenderView senderView = VIEW_STATUS;
 static int selectedEditChoice = 0;
 static bool editMenuInMorseSubmenu = false;
+#if defined(BT_CHEST_BUILD)
+static bool editMenuInChestSubmenu = false;
+static Servo chestServo;
+static uint8_t attachedServoPin = 255;
+#endif
 
 enum LdrCalibrationStep {
   LDR_CALIBRATION_DARK,
@@ -506,6 +525,14 @@ static const char* activeEditorTitle() {
       return "Scanner-ID";
     case VIEW_EDIT_LDR_BUFFER_PERCENT:
       return "LDR Puffer %";
+#if defined(BT_CHEST_BUILD)
+    case VIEW_EDIT_SERVO_PIN:
+      return "Servo Pin";
+    case VIEW_EDIT_SERVO_ANGLE_OPEN:
+      return "Servo Winkel offen";
+    case VIEW_EDIT_SERVO_ANGLE_CLOSED:
+      return "Servo Winkel zu";
+#endif
     default:
       return "Editor";
   }
@@ -622,20 +649,39 @@ static void setDefaultLdrCalibration() {
 }
 
 static void setDefaults() {
+#if defined(BT_CHEST_BUILD)
+  snprintf(config.stationName, sizeof(config.stationName), "BT Kiste");
+#else
   snprintf(config.stationName, sizeof(config.stationName), "Fake Station");
+#endif
   snprintf(config.mac, sizeof(config.mac), "C2:AD:BE:AC:00:01");
   snprintf(config.morseWord, sizeof(config.morseWord), "HINWEIS");
   snprintf(config.codeword, sizeof(config.codeword), "123");
+#if defined(BT_CHEST_BUILD)
+  snprintf(config.successMessage, sizeof(config.successMessage), "KISTE GEOEFFNET");
+#else
   snprintf(config.successMessage, sizeof(config.successMessage), "RICHTIG!");
+#endif
   snprintf(config.failMessage, sizeof(config.failMessage), "FALSCHES PASSWORT");
   snprintf(config.nextPassword, sizeof(config.nextPassword), "NEXT1234");
   config.allowedScannerId = 0;
   setDefaultLdrCalibration();
+#if defined(BT_CHEST_BUILD)
+  config.servoPin = 27;
+  config.servoAngleOpen = 90;
+  config.servoAngleClosed = 0;
+#endif
 }
 
 static void loadConfig() {
   setDefaults();
-  senderPrefs.begin("btsender", true);
+  senderPrefs.begin(
+#if defined(BT_CHEST_BUILD)
+  "btkiste",
+#else
+  "btsender",
+#endif
+  true);
   if (senderPrefs.getBool("valid", false)) {
     String name = senderPrefs.getString("name", config.stationName);
     String mac = senderPrefs.getString("mac", config.mac);
@@ -699,12 +745,23 @@ static void loadConfig() {
         config.ldrBufferPercent = LDR_DEFAULT_BUFFER_PERCENT;
       }
     }
+#if defined(BT_CHEST_BUILD)
+    config.servoPin = constrain(senderPrefs.getInt("servoPin", config.servoPin), 0, 33);
+    config.servoAngleOpen = constrain(senderPrefs.getInt("servoOpen", config.servoAngleOpen), 0, 180);
+    config.servoAngleClosed = constrain(senderPrefs.getInt("servoClosed", config.servoAngleClosed), 0, 180);
+#endif
   }
   senderPrefs.end();
 }
 
 static void saveConfig() {
-  senderPrefs.begin("btsender", false);
+  senderPrefs.begin(
+#if defined(BT_CHEST_BUILD)
+      "btkiste",
+#else
+      "btsender",
+#endif
+      false);
   senderPrefs.putBool("valid", true);
   senderPrefs.putString("name", config.stationName);
   senderPrefs.putString("mac", config.mac);
@@ -717,8 +774,34 @@ static void saveConfig() {
   senderPrefs.putInt("ldrDark", config.ldrDarkRaw);
   senderPrefs.putInt("ldrBright", config.ldrBrightRaw);
   senderPrefs.putInt("ldrBuffer", config.ldrBufferPercent);
+#if defined(BT_CHEST_BUILD)
+  senderPrefs.putInt("servoPin", config.servoPin);
+  senderPrefs.putInt("servoOpen", config.servoAngleOpen);
+  senderPrefs.putInt("servoClosed", config.servoAngleClosed);
+#endif
   senderPrefs.end();
 }
+
+#if defined(BT_CHEST_BUILD)
+static void setChestServoAngle(uint8_t angle) {
+  if (chestServo.attached() && attachedServoPin != config.servoPin) {
+    chestServo.detach();
+  }
+  if (!chestServo.attached()) {
+    chestServo.attach(config.servoPin);
+    attachedServoPin = config.servoPin;
+  }
+  chestServo.write(angle);
+}
+
+static void closeChest() {
+  setChestServoAngle(config.servoAngleClosed);
+}
+
+static void openChest() {
+  setChestServoAngle(config.servoAngleOpen);
+}
+#endif
 
 static void ensureBleInit() {
   if (advertising != nullptr) {
@@ -777,7 +860,11 @@ static void startOrRefreshAdvertising() {
 
 static void drawStatusScreen() {
   tft.fillScreen(COLOR_BG);
+#if defined(BT_CHEST_BUILD)
+  drawHeader("BT Schatzkiste");
+#else
   drawHeader("BT Beacon Sender");
+#endif
 
   tft.fillRoundRect(8, 46, SCREEN_W - 16, 154, 8, COLOR_CARD_BG);
   tft.setTextColor(COLOR_CARD_TEXT, COLOR_CARD_BG);
@@ -812,12 +899,28 @@ static void drawStatusScreen() {
 
 static void drawEditMenuScreen() {
   tft.fillScreen(COLOR_BG);
-  drawHeader(editMenuInMorseSubmenu ? "Passwort & Codewort" : "Sender Settings");
+  drawHeader(editMenuInMorseSubmenu ? "Passwort & Codewort" :
+#if defined(BT_CHEST_BUILD)
+             (editMenuInChestSubmenu ? "Kisten Servo" : "Sender Settings"));
+#else
+             "Sender Settings");
+#endif
 
+#if defined(BT_CHEST_BUILD)
+  const char* mainLabels[8] = {"Edit Name", "Edit MAC", "Passwort & Codewort", "OK-Text", "Fail-Text", "Passwort", "Kisten Servo", "Back"};
+  const char* chestLabels[6] = {"Servo Pin", "Winkel offen", "Winkel zu", "Servo offen", "Servo geschlossen", "Zuruck"};
+#else
   const char* mainLabels[7] = {"Edit Name", "Edit MAC", "Passwort & Codewort", "OK-Text", "Fail-Text", "Passwort", "Back"};
+#endif
   const char* morseLabels[4] = {"Passwort", "Codewort", "Scanner-ID", "Zuruck"};
   const char** labels = editMenuInMorseSubmenu ? morseLabels : mainLabels;
-  int count = editMenuInMorseSubmenu ? 4 : 7;
+  int count = editMenuInMorseSubmenu ? 4 : sizeof(mainLabels) / sizeof(mainLabels[0]);
+#if defined(BT_CHEST_BUILD)
+  if (editMenuInChestSubmenu) {
+    labels = chestLabels;
+    count = 6;
+  }
+#endif
 
   for (int i = 0; i < count; ++i) {
     int top = 40 + (i * 28);
@@ -840,19 +943,19 @@ static void drawMorseReadyScreen() {
   tft.fillRoundRect(10, 48, SCREEN_W - 20, 118, 8, COLOR_CARD_BG);
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(COLOR_CARD_TEXT, COLOR_CARD_BG);
-    tft.drawString(btReceiveActive ? "Empfang ist bereit" : "Warte auf Passwort", 18, 66, 2);
+  tft.drawString(btReceiveActive ? "Empfang ist bereit" : "Empfang inaktiv", 18, 66, 2);
   tft.drawString("Scanner waehlt diese Station.", 18, 98, 1);
   tft.drawString("Dann wird das Passwort gesendet.", 18, 122, 1);
+#if defined(BT_CHEST_BUILD)
+  tft.drawString("Bei Erfolg wird die Kiste geoeffnet.", 18, 146, 1);
+#else
   tft.drawString("Bei Erfolg erscheint das Codewort.", 18, 146, 1);
-
-  tft.fillRoundRect(12, 186, SCREEN_W - 24, 40, 6, COLOR_BUTTON_BG);
-  tft.drawRoundRect(12, 186, SCREEN_W - 24, 40, 6, COLOR_BUTTON_HL_BG);
-  tft.setTextColor(COLOR_BUTTON_TEXT, COLOR_BUTTON_BG);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("Empfang starten", SCREEN_W / 2, 206, 2);
+#endif
 
   tft.fillRoundRect(12, 238, SCREEN_W - 24, 40, 6, COLOR_BUTTON_BG);
   tft.drawRoundRect(12, 238, SCREEN_W - 24, 40, 6, COLOR_BUTTON_HL_BG);
+  tft.setTextColor(COLOR_BUTTON_TEXT, COLOR_BUTTON_BG);
+  tft.setTextDatum(MC_DATUM);
   tft.drawString("Zuruck", SCREEN_W / 2, 258, 2);
 
   drawFooter("Empfang per Bluetooth");
@@ -867,10 +970,14 @@ static void drawMorseResultScreen() {
   tft.setTextColor(TFT_WHITE, morseResultSuccess ? 0x03E0 : 0x7800);
   tft.drawString(morseResultSuccess ? config.successMessage : config.failMessage, 18, 82, 2);
   if (morseResultSuccess) {
+#if defined(BT_CHEST_BUILD)
+    tft.drawString("SERVO IST GEOEFFNET", 18, 126, 2);
+#else
     tft.drawString("DEIN CODEWORT", 18, 116, 2);
     tft.setTextDatum(MC_DATUM);
     tft.drawString(config.codeword, SCREEN_W / 2, 154, 4);
     tft.setTextDatum(ML_DATUM);
+#endif
   } else {
     tft.drawString("Bitte noch einmal versuchen.", 18, 126, 1);
   }
@@ -1036,9 +1143,29 @@ static void saveKeyboardBuffer() {
       }
       break;
     }
+#if defined(BT_CHEST_BUILD)
+    case 11:
+      config.servoPin = constrain(atoi(keyboardState.buffer), 0, 33);
+      break;
+    case 12:
+      config.servoAngleOpen = constrain(atoi(keyboardState.buffer), 0, 180);
+      break;
+    case 13:
+      config.servoAngleClosed = constrain(atoi(keyboardState.buffer), 0, 180);
+      break;
+#endif
   }
 
   saveConfig();
+#if defined(BT_CHEST_BUILD)
+  if (keyboardState.fieldIndex == 12) {
+    openChest();
+    delay(1500);
+    closeChest();
+  } else if (keyboardState.fieldIndex == 11 || keyboardState.fieldIndex == 13) {
+    closeChest();
+  }
+#endif
   if (keyboardState.fieldIndex <= 1) {
     startOrRefreshAdvertising();
   }
@@ -1486,6 +1613,9 @@ static void noteInteraction() {
 static void enterEditMenu() {
   senderView = VIEW_EDIT_MENU;
   editMenuInMorseSubmenu = false;
+#if defined(BT_CHEST_BUILD)
+  editMenuInChestSubmenu = false;
+#endif
   selectedEditChoice = 0;
   drawEditMenuScreen();
 }
@@ -1500,6 +1630,34 @@ static void startMorseListening() {
 static void handleEditMenuSelection(int index) {
   selectedEditChoice = index;
   if (!editMenuInMorseSubmenu) {
+#if defined(BT_CHEST_BUILD)
+    if (editMenuInChestSubmenu) {
+      if (index == 0) {
+        char value[4];
+        snprintf(value, sizeof(value), "%u", config.servoPin);
+        openTextEditor(11, value, sizeof(value) - 1, KB_NUMERIC, VIEW_EDIT_SERVO_PIN);
+      } else if (index == 1) {
+        char value[4];
+        snprintf(value, sizeof(value), "%u", config.servoAngleOpen);
+        openTextEditor(12, value, sizeof(value) - 1, KB_NUMERIC, VIEW_EDIT_SERVO_ANGLE_OPEN);
+      } else if (index == 2) {
+        char value[4];
+        snprintf(value, sizeof(value), "%u", config.servoAngleClosed);
+        openTextEditor(13, value, sizeof(value) - 1, KB_NUMERIC, VIEW_EDIT_SERVO_ANGLE_CLOSED);
+      } else if (index == 3) {
+        openChest();
+        drawEditMenuScreen();
+      } else if (index == 4) {
+        closeChest();
+        drawEditMenuScreen();
+      } else {
+        editMenuInChestSubmenu = false;
+        selectedEditChoice = 0;
+        drawEditMenuScreen();
+      }
+      return;
+    }
+#endif
     if (index == 0) {
       openTextEditor(0, config.stationName, sizeof(config.stationName) - 1, KB_ALPHA, VIEW_EDIT_NAME);
     } else if (index == 1) {
@@ -1514,6 +1672,12 @@ static void handleEditMenuSelection(int index) {
       openTextEditor(4, config.failMessage, sizeof(config.failMessage) - 1, KB_ALPHA, VIEW_EDIT_FAIL_MESSAGE);
     } else if (index == 5) {
       openTextEditor(5, config.nextPassword, sizeof(config.nextPassword) - 1, KB_ALPHA, VIEW_EDIT_NEXT_PASSWORD);
+#if defined(BT_CHEST_BUILD)
+    } else if (index == 6) {
+      editMenuInChestSubmenu = true;
+      selectedEditChoice = 0;
+      drawEditMenuScreen();
+#endif
     } else {
       senderView = VIEW_STATUS;
       drawStatusScreen();
@@ -1544,12 +1708,16 @@ static void openTextEditor(uint8_t fieldIndex, const char* text, uint8_t maxLen,
 static bool touchTap(uint16_t x, uint16_t y) {
   if (senderView == VIEW_STATUS) {
     if (x >= 12 && x <= SCREEN_W - 12 && y >= 230 && y <= 270) {
-      senderView = VIEW_MORSE_READY;
-      drawMorseReadyScreen();
+      startMorseListening();
       return true;
     }
   } else if (senderView == VIEW_EDIT_MENU) {
-    int count = editMenuInMorseSubmenu ? 4 : 7;
+    int count = editMenuInMorseSubmenu ? 4 :
+#if defined(BT_CHEST_BUILD)
+                (editMenuInChestSubmenu ? 6 : 8);
+#else
+                7;
+#endif
     for (int i = 0; i < count; ++i) {
       int top = 40 + (i * 28);
       if (y >= top && y <= top + 22) {
@@ -1563,10 +1731,6 @@ static bool touchTap(uint16_t x, uint16_t y) {
       return true;
     }
   } else if (senderView == VIEW_MORSE_READY) {
-    if (x >= 12 && x <= SCREEN_W - 12 && y >= 186 && y <= 226) {
-      startMorseListening();
-      return true;
-    }
     if (x >= 12 && x <= SCREEN_W - 12 && y >= 238 && y <= 278) {
       btReceiveActive = false;
       senderView = VIEW_STATUS;
@@ -1653,10 +1817,16 @@ void btSenderEnter() {
   normalizeMorseWord(config.nextPassword);
   pinMode(LDR_PIN, INPUT);
   analogRead(LDR_PIN);
+#if defined(BT_CHEST_BUILD)
+  closeChest();
+#endif
   startOrRefreshAdvertising();
 
   senderView = VIEW_STATUS;
   editMenuInMorseSubmenu = false;
+#if defined(BT_CHEST_BUILD)
+  editMenuInChestSubmenu = false;
+#endif
   selectedEditChoice = 0;
   displayAwake = true;
   touchPressed = false;
@@ -1679,6 +1849,11 @@ void btSenderLoop() {
     strncpy(morseResultWord, btPendingPassword, sizeof(morseResultWord) - 1);
     morseResultWord[sizeof(morseResultWord) - 1] = 0;
     morseResultSuccess = btPendingSuccess;
+#if defined(BT_CHEST_BUILD)
+    if (morseResultSuccess) {
+      openChest();
+    }
+#endif
     btReceiveActive = false;
     morseRx.listening = false;
     displayAwake = true;
