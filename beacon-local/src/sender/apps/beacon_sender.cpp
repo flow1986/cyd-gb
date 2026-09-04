@@ -60,6 +60,7 @@ enum SenderView {
   VIEW_EDIT_NAME,
   VIEW_EDIT_MAC,
   VIEW_EDIT_MORSE_WORD,
+  VIEW_EDIT_CODEWORD,
   VIEW_EDIT_LDR_DARK_RAW,
   VIEW_EDIT_LDR_BRIGHT_RAW,
   VIEW_EDIT_OK_MESSAGE,
@@ -107,6 +108,7 @@ struct SenderConfig {
   char stationName[24];
   char mac[18];
   char morseWord[16];
+  char codeword[4];
   char successMessage[32];
   char failMessage[32];
   char nextPassword[32];
@@ -428,6 +430,20 @@ static void normalizeMorseWord(char* text) {
   text[sizeof(cleaned) - 1] = 0;
 }
 
+static void normalizeCodeword(char* text) {
+  char cleaned[4] = {0};
+  uint8_t out = 0;
+
+  for (uint8_t i = 0; text[i] != 0 && out < 3; ++i) {
+    if (isdigit(static_cast<unsigned char>(text[i]))) {
+      cleaned[out++] = text[i];
+    }
+  }
+
+  strncpy(text, cleaned, sizeof(cleaned));
+  text[sizeof(cleaned) - 1] = 0;
+}
+
 static const char* morseCodeForChar(char c) {
   for (const MorseCodeEntry& entry : kMorseTable) {
     if (entry.ch == c) {
@@ -473,7 +489,9 @@ static const char* activeEditorTitle() {
     case VIEW_EDIT_MAC:
       return "Edit MAC";
     case VIEW_EDIT_MORSE_WORD:
-      return "Codewort";
+      return "Passwort";
+    case VIEW_EDIT_CODEWORD:
+      return "Codewort (3 Ziffern)";
     case VIEW_EDIT_LDR_DARK_RAW:
       return "Dunkelwert";
     case VIEW_EDIT_LDR_BRIGHT_RAW:
@@ -607,8 +625,9 @@ static void setDefaults() {
   snprintf(config.stationName, sizeof(config.stationName), "Fake Station");
   snprintf(config.mac, sizeof(config.mac), "C2:AD:BE:AC:00:01");
   snprintf(config.morseWord, sizeof(config.morseWord), "HINWEIS");
-  snprintf(config.successMessage, sizeof(config.successMessage), "RICHTIGES WORT");
-  snprintf(config.failMessage, sizeof(config.failMessage), "FALSCHES WORT");
+  snprintf(config.codeword, sizeof(config.codeword), "123");
+  snprintf(config.successMessage, sizeof(config.successMessage), "RICHTIG!");
+  snprintf(config.failMessage, sizeof(config.failMessage), "FALSCHES PASSWORT");
   snprintf(config.nextPassword, sizeof(config.nextPassword), "NEXT1234");
   config.allowedScannerId = 0;
   setDefaultLdrCalibration();
@@ -621,12 +640,14 @@ static void loadConfig() {
     String name = senderPrefs.getString("name", config.stationName);
     String mac = senderPrefs.getString("mac", config.mac);
     String morseWord = senderPrefs.getString("code", config.morseWord);
+    String codeword = senderPrefs.getString("codeword", config.codeword);
     String successMessage = senderPrefs.getString("ok", config.successMessage);
     String failMessage = senderPrefs.getString("fail", config.failMessage);
     String nextPassword = senderPrefs.getString("nextpw", config.nextPassword);
     name.trim();
     mac.trim();
     morseWord.trim();
+    codeword.trim();
     successMessage.trim();
     failMessage.trim();
     nextPassword.trim();
@@ -643,6 +664,11 @@ static void loadConfig() {
       strncpy(config.morseWord, morseWord.c_str(), sizeof(config.morseWord) - 1);
       config.morseWord[sizeof(config.morseWord) - 1] = 0;
       normalizeMorseWord(config.morseWord);
+    }
+    if (codeword.length() > 0) {
+      strncpy(config.codeword, codeword.c_str(), sizeof(config.codeword) - 1);
+      config.codeword[sizeof(config.codeword) - 1] = 0;
+      normalizeCodeword(config.codeword);
     }
     if (successMessage.length() > 0) {
       strncpy(config.successMessage, successMessage.c_str(), sizeof(config.successMessage) - 1);
@@ -683,6 +709,7 @@ static void saveConfig() {
   senderPrefs.putString("name", config.stationName);
   senderPrefs.putString("mac", config.mac);
   senderPrefs.putString("code", config.morseWord);
+  senderPrefs.putString("codeword", config.codeword);
   senderPrefs.putString("ok", config.successMessage);
   senderPrefs.putString("fail", config.failMessage);
   senderPrefs.putString("nextpw", config.nextPassword);
@@ -769,7 +796,6 @@ static void drawStatusScreen() {
   tft.drawString(config.mac, 20, 151, 2);
 
   tft.setTextColor(COLOR_CARD_TEXT, COLOR_CARD_BG);
-  tft.drawString("Morse", 16, 178, 1);
   tft.drawString("BT Empfang", 16, 178, 1);
   tft.fillRoundRect(16, 186, SCREEN_W - 32, 22, 4, COLOR_VALUE_BG);
   tft.setTextColor(COLOR_VALUE_TEXT, COLOR_VALUE_BG);
@@ -786,12 +812,12 @@ static void drawStatusScreen() {
 
 static void drawEditMenuScreen() {
   tft.fillScreen(COLOR_BG);
-  drawHeader(editMenuInMorseSubmenu ? "Morse Setup" : "Sender Settings");
+  drawHeader(editMenuInMorseSubmenu ? "Passwort & Codewort" : "Sender Settings");
 
-  const char* mainLabels[7] = {"Edit Name", "Edit MAC", "Morse", "OK-Text", "Fail-Text", "Passwort", "Back"};
-  const char* morseLabels[7] = {"Codewort", "Dunkelwert", "Hellwert", "LDR Puffer %", "LDR Kalibrierung", "Scanner-ID", "Zuruck"};
+  const char* mainLabels[7] = {"Edit Name", "Edit MAC", "Passwort & Codewort", "OK-Text", "Fail-Text", "Passwort", "Back"};
+  const char* morseLabels[4] = {"Passwort", "Codewort", "Scanner-ID", "Zuruck"};
   const char** labels = editMenuInMorseSubmenu ? morseLabels : mainLabels;
-  int count = editMenuInMorseSubmenu ? 7 : 7;
+  int count = editMenuInMorseSubmenu ? 4 : 7;
 
   for (int i = 0; i < count; ++i) {
     int top = 40 + (i * 28);
@@ -814,10 +840,10 @@ static void drawMorseReadyScreen() {
   tft.fillRoundRect(10, 48, SCREEN_W - 20, 118, 8, COLOR_CARD_BG);
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(COLOR_CARD_TEXT, COLOR_CARD_BG);
-  tft.drawString("BT-Modus", 18, 66, 2);
-  tft.drawString("Scanner per BT senden lassen", 18, 98, 1);
-  tft.drawString("Dann Empfang starten", 18, 122, 1);
-  tft.drawString("Codewort bleibt intern", 18, 146, 1);
+    tft.drawString(btReceiveActive ? "Empfang ist bereit" : "Warte auf Passwort", 18, 66, 2);
+  tft.drawString("Scanner waehlt diese Station.", 18, 98, 1);
+  tft.drawString("Dann wird das Passwort gesendet.", 18, 122, 1);
+  tft.drawString("Bei Erfolg erscheint das Codewort.", 18, 146, 1);
 
   tft.fillRoundRect(12, 186, SCREEN_W - 24, 40, 6, COLOR_BUTTON_BG);
   tft.drawRoundRect(12, 186, SCREEN_W - 24, 40, 6, COLOR_BUTTON_HL_BG);
@@ -829,22 +855,24 @@ static void drawMorseReadyScreen() {
   tft.drawRoundRect(12, 238, SCREEN_W - 24, 40, 6, COLOR_BUTTON_HL_BG);
   tft.drawString("Zuruck", SCREEN_W / 2, 258, 2);
 
-  drawFooter("BT-Paket sendet das Passwort");
+  drawFooter("Empfang per Bluetooth");
 }
 
 static void drawMorseResultScreen() {
   tft.fillScreen(COLOR_BG);
-  drawHeader(morseResultSuccess ? "Morse OK" : "Morse Fail");
+  drawHeader(morseResultSuccess ? "Passwort richtig" : "Passwort falsch");
 
   tft.fillRoundRect(10, 60, SCREEN_W - 20, 120, 8, morseResultSuccess ? 0x03E0 : 0x7800);
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(TFT_WHITE, morseResultSuccess ? 0x03E0 : 0x7800);
   tft.drawString(morseResultSuccess ? config.successMessage : config.failMessage, 18, 82, 2);
-  tft.drawString("Empfangen:", 18, 110, 2);
-  tft.drawString(morseResultWord[0] ? morseResultWord : "-", 18, 132, 2);
   if (morseResultSuccess) {
-    tft.drawString("Passwort:", 18, 154, 2);
-    tft.drawString(config.nextPassword, 18, 172, 2);
+    tft.drawString("DEIN CODEWORT", 18, 116, 2);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString(config.codeword, SCREEN_W / 2, 154, 4);
+    tft.setTextDatum(ML_DATUM);
+  } else {
+    tft.drawString("Bitte noch einmal versuchen.", 18, 126, 1);
   }
 
   tft.fillRoundRect(12, 204, SCREEN_W - 24, 34, 6, COLOR_BUTTON_BG);
@@ -997,6 +1025,15 @@ static void saveKeyboardBuffer() {
     case 9: {
       int parsed = constrain(atoi(keyboardState.buffer), 0, 8);
       config.allowedScannerId = static_cast<uint8_t>(parsed);
+      break;
+    }
+    case 10: {
+      char codeword[sizeof(config.codeword)] = {0};
+      strncpy(codeword, keyboardState.buffer, sizeof(codeword) - 1);
+      normalizeCodeword(codeword);
+      if (strlen(codeword) == 3) {
+        strncpy(config.codeword, codeword, sizeof(config.codeword));
+      }
       break;
     }
   }
@@ -1454,11 +1491,10 @@ static void enterEditMenu() {
 }
 
 static void startMorseListening() {
-  senderView = VIEW_MORSE_LISTEN;
-  resetMorseReceiver();
   noteInteraction();
   btReceiveActive = true;
-  drawMorseListenScreen(true);
+  senderView = VIEW_MORSE_READY;
+  drawMorseReadyScreen();
 }
 
 static void handleEditMenuSelection(int index) {
@@ -1486,20 +1522,8 @@ static void handleEditMenuSelection(int index) {
     if (index == 0) {
       openTextEditor(2, config.morseWord, sizeof(config.morseWord) - 1, KB_ALPHA, VIEW_EDIT_MORSE_WORD);
     } else if (index == 1) {
-      char bufferText[8];
-      snprintf(bufferText, sizeof(bufferText), "%d", config.ldrDarkRaw);
-      openTextEditor(7, bufferText, sizeof(bufferText) - 1, KB_NUMERIC, VIEW_EDIT_LDR_DARK_RAW);
+      openTextEditor(10, config.codeword, sizeof(config.codeword) - 1, KB_NUMERIC, VIEW_EDIT_CODEWORD);
     } else if (index == 2) {
-      char bufferText[8];
-      snprintf(bufferText, sizeof(bufferText), "%d", config.ldrBrightRaw);
-      openTextEditor(8, bufferText, sizeof(bufferText) - 1, KB_NUMERIC, VIEW_EDIT_LDR_BRIGHT_RAW);
-    } else if (index == 3) {
-      char bufferText[8];
-      snprintf(bufferText, sizeof(bufferText), "%u", config.ldrBufferPercent);
-      openTextEditor(6, bufferText, sizeof(bufferText) - 1, KB_NUMERIC, VIEW_EDIT_LDR_BUFFER_PERCENT);
-    } else if (index == 4) {
-      startLdrCalibration();
-    } else if (index == 5) {
       char bufferText[8];
       snprintf(bufferText, sizeof(bufferText), "%u", config.allowedScannerId);
       openTextEditor(9, bufferText, sizeof(bufferText) - 1, KB_NUMERIC, VIEW_EDIT_SCANNER_ID);
@@ -1525,7 +1549,7 @@ static bool touchTap(uint16_t x, uint16_t y) {
       return true;
     }
   } else if (senderView == VIEW_EDIT_MENU) {
-    int count = editMenuInMorseSubmenu ? 7 : 7;
+    int count = editMenuInMorseSubmenu ? 4 : 7;
     for (int i = 0; i < count; ++i) {
       int top = 40 + (i * 28);
       if (y >= top && y <= top + 22) {
@@ -1576,7 +1600,7 @@ static bool touchTap(uint16_t x, uint16_t y) {
 }
 
 static void handleDisplaySleep() {
-  if (senderView == VIEW_MORSE_LISTEN) {
+  if (btReceiveActive) {
     return;
   }
 
@@ -1625,6 +1649,7 @@ void btSenderEnter() {
   loadConfig();
   normalizeMac(config.mac);
   normalizeMorseWord(config.morseWord);
+  normalizeCodeword(config.codeword);
   normalizeMorseWord(config.nextPassword);
   pinMode(LDR_PIN, INPUT);
   analogRead(LDR_PIN);
