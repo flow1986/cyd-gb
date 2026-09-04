@@ -89,6 +89,7 @@ int launcher_show(RomEntry* roms, int cnt) {
 	draw_header("Game Boy ROMs");
 
 	draw_list(roms,cnt,pg,sel);
+	wait_release();
 	uint16_t prev = 0;
 	uint32_t dbg_t = 0;
 	int total = cnt + 1;
