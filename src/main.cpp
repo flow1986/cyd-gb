@@ -16,6 +16,7 @@ static volatile bool emu_on = false, menu_req = false;
 static bool show_fps_overlay = false;
 static bool show_sd_save_overlay = false;
 static bool has_saved_settings = false;
+static constexpr uint32_t SAVE_RAM_DEBOUNCE_MS = 3000;
 
 void input_task(void* p) {
     (void)p;
@@ -51,6 +52,7 @@ static void save_ram() {
     if(sz>0) {
         bool ok = sd_save_state(cur_path,r,sz);
         Serial.printf("[SAVE] %u bytes (%s)\n",sz, ok ? "ok" : "fail");
+        if (ok) emu_clear_cart_ram_dirty();
     }
 }
 
@@ -70,6 +72,7 @@ static void load_ram() {
 
     if (sd_load_state(cur_path, cart_ram, sz)) {
         Serial.printf("[SAVE] Loaded %u bytes\n", sz);
+        emu_clear_cart_ram_dirty();
     } else {
         Serial.printf("[SAVE] No load for %s\n", cur_path);
     }
@@ -84,6 +87,11 @@ void run_emu() {
 
     while(emu_on) {
         emu_run_frame();
+
+        if (emu_cart_ram_dirty() &&
+            millis() - emu_get_cart_ram_last_write_ms() >= SAVE_RAM_DEBOUNCE_MS) {
+            save_ram();
+        }
 
         if (menu_req) {
             menu_req = false;

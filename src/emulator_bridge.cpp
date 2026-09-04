@@ -53,6 +53,8 @@ static uint16_t lbuf[GB_SCREEN_W];
 static uint8_t fskip = 0, fcnt = 0;
 static uint32_t fpsc = 0, fpst = 0, cfps = 0;
 static uint8_t jpad = 0;
+static volatile bool cart_ram_dirty = false;
+static volatile uint32_t cart_ram_last_write_ms = 0;
 
 // ─── 20 Palettes (SW is identity for testing; remove pre-swapped values) ──
 // Change this to identity to test driver-side byte ordering (use with setSwapBytes).
@@ -101,7 +103,11 @@ static uint8_t IRAM_ATTR gb_cram_r(struct gb_s* g, const uint_fast32_t a) {
 }
 static void IRAM_ATTR gb_cram_w(struct gb_s* g, const uint_fast32_t a, const uint8_t v) {
     (void)g;
-    if(a<MAXRAM) cram[a]=v;
+    if (a < MAXRAM && cram[a] != v) {
+        cram[a] = v;
+        cart_ram_dirty = true;
+        cart_ram_last_write_ms = millis();
+    }
 }
 static void gb_err(struct gb_s* g, const enum gb_error_e e, const uint16_t a) {
     (void)g; Serial.printf("[EMU] Err %d @0x%04X\n",(int)e,a);
@@ -169,6 +175,7 @@ bool emu_init(uint8_t*,uint32_t) {
     if(r!=GB_INIT_NO_ERROR){Serial.printf("[EMU] init fail %d\n",(int)r);return false;}
     gb_init_lcd(gb,lcd_line);
     fcnt=fpsc=cfps=0; fpst=millis(); acc=0;
+    emu_clear_cart_ram_dirty();
     char t[17]={0}; for(int i=0;i<16;i++){char c=(char)b0[0x134+i];t[i]=(c>=32&&c<127)?c:0;}
     Serial.printf("[EMU] '%s' %uKB heap:%u\n",t,romlen/1024,ESP.getFreeHeap());
     return true;
@@ -186,9 +193,9 @@ void emu_run_frame() {
 void emu_set_joypad(uint8_t b){jpad=b;}
 uint8_t* emu_get_cart_ram(uint32_t* s){uint_fast32_t r=0;gb_get_save_size_s(gb,&r);if(s)*s=(uint32_t)r;return cram;}
 void emu_set_cart_ram(const uint8_t* d,uint32_t s){if(s>MAXRAM)s=MAXRAM;memcpy(cram,d,s);}
-bool emu_cart_ram_dirty(){return false;}
-uint32_t emu_get_cart_ram_last_write_ms(){return 0;}
-void emu_clear_cart_ram_dirty(){}
+bool emu_cart_ram_dirty(){return cart_ram_dirty;}
+uint32_t emu_get_cart_ram_last_write_ms(){return cart_ram_last_write_ms;}
+void emu_clear_cart_ram_dirty(){cart_ram_dirty=false;}
 void emu_set_frame_skip(uint8_t s){fskip=s;}
 uint8_t emu_get_frame_skip(){return fskip;}
 uint32_t emu_get_fps(){return cfps;}
