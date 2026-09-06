@@ -402,11 +402,31 @@ bool connectWifiAndSyncTime() {
   String password = preferences.getString("pass", "");
   preferences.end();
   if (!ssid.length()) return false;
+
+  drawCentered("WLAN Verbinden", ssid.c_str());
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid.c_str(), password.c_str());
-  uint32_t deadline = millis() + 20000;
+  uint32_t deadline = millis() + 12000;
   while (WiFi.status() != WL_CONNECTED && millis() < deadline) delay(250);
-  if (WiFi.status() != WL_CONNECTED) return false;
+
+  if (WiFi.status() != WL_CONNECTED) {
+    drawCentered("Verbindung fehlgeschlagen", "WLAN-Scan startet...");
+    delay(1000);
+    String newSsid = selectWifiNetwork(ssid);
+    String newPass = editField("WLAN Passwort", password, 63, true);
+
+    preferences.begin("btwifi", false);
+    preferences.putString("ssid", newSsid);
+    preferences.putString("pass", newPass);
+    preferences.end();
+
+    drawCentered("WLAN Verbinden", newSsid.c_str());
+    WiFi.begin(newSsid.c_str(), newPass.c_str());
+    deadline = millis() + 15000;
+    while (WiFi.status() != WL_CONNECTED && millis() < deadline) delay(250);
+    if (WiFi.status() != WL_CONNECTED) return false;
+  }
+
   configTzTime(kBerlinTz, "pool.ntp.org", "time.cloudflare.com");
   char timestampText[32];
   time_t epoch = 0;
@@ -736,6 +756,91 @@ void showLogBrowser() {
   }
 }
 
+void editWifiConfig() {
+  preferences.begin("btwifi", true);
+  String ssid = preferences.getString("ssid", "");
+  String password = preferences.getString("pass", "");
+  preferences.end();
+
+  ssid = selectWifiNetwork(ssid);
+  password = editField("WLAN Passwort", password, 63, true);
+
+  preferences.begin("btwifi", false);
+  preferences.putString("ssid", ssid);
+  preferences.putString("pass", password);
+  preferences.end();
+}
+
+void editStationConfig(uint8_t index) {
+  char title[32];
+  snprintf(title, sizeof(title), "Station %u Name", index + 1);
+  String name = editField(title, stations[index].name, sizeof(stations[index].name) - 1);
+  name.toCharArray(stations[index].name, sizeof(stations[index].name));
+
+  snprintf(title, sizeof(title), "Station %u MAC", index + 1);
+  String mac = editField(title, stations[index].mac, 17);
+  mac.toUpperCase();
+  mac.toCharArray(stations[index].mac, sizeof(stations[index].mac));
+
+  preferences.begin("bt", false);
+  preferences.putBool("valid", true);
+  String nameKey = "n" + String(index);
+  String macKey = "m" + String(index);
+  preferences.putString(nameKey.c_str(), stations[index].name);
+  preferences.putString(macKey.c_str(), stations[index].mac);
+  preferences.end();
+}
+
+void showSetupMenu() {
+  while (true) {
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawString("Einstellungen", SCREEN_W / 2, 16, 2);
+
+    // Button 0: WLAN Config
+    tft.drawRect(8, 38, SCREEN_W - 16, 32, 0x7BEF);
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawString("WLAN einstellen", 14, 46, 2);
+
+    // Buttons 1-5: Station 1-5
+    for (uint8_t index = 0; index < kStationCount; ++index) {
+      int y = 76 + index * 36;
+      tft.drawRect(8, y, SCREEN_W - 16, 30, 0x7BEF);
+      tft.setTextDatum(TL_DATUM);
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.drawString(stations[index].name, 14, y + 7, 2);
+      tft.setTextDatum(TR_DATUM);
+      tft.setTextColor(0x7BEF, TFT_BLACK);
+      tft.drawString(stations[index].mac, SCREEN_W - 14, y + 7, 1);
+    }
+
+    tft.drawRect(68, 286, 104, 26, 0x7BEF);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawString("FERTIG", SCREEN_W / 2, 299, 2);
+
+    int16_t tapX = 0;
+    int16_t tapY = 0;
+    waitForTap(&tapX, &tapY);
+
+    if (tapY >= 286) return;
+
+    if (tapY >= 38 && tapY < 70) {
+      editWifiConfig();
+      timeSynced = false;
+      WiFi.disconnect();
+      if (connectWifiAndSyncTime()) setupWebServer();
+    } else if (tapY >= 76 && tapY < 76 + kStationCount * 36) {
+      uint8_t index = (tapY - 76) / 36;
+      if (index < kStationCount) {
+        editStationConfig(index);
+      }
+    }
+  }
+}
+
 }  // namespace
 
 void setup() {
@@ -749,7 +854,9 @@ void setup() {
     while (true) delay(1000);
   }
   loadStations();
-  if (!hasSavedWifi() || !hasSavedStations()) runSetupWizard();
+  if (!hasSavedWifi()) {
+    editWifiConfig();
+  }
   if (connectWifiAndSyncTime()) setupWebServer();
   initBle();
   for (const BeaconStation& station : stations) logEvent("boot", station);
@@ -761,10 +868,7 @@ void loop() {
     server.handleClient();
   }
   if (bottomButtonTapped(126, 230)) {
-    runSetupWizard();
-    timeSynced = false;
-    WiFi.disconnect();
-    if (connectWifiAndSyncTime()) setupWebServer();
+    showSetupMenu();
     drawStatus();
   }
   if (bottomButtonTapped(10, 114)) {
