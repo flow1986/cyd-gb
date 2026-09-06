@@ -432,7 +432,12 @@ bool connectWifiAndSyncTime() {
   time_t epoch = 0;
   for (uint8_t attempt = 0; attempt < 20; ++attempt) {
     timestamp(timestampText, sizeof(timestampText), &epoch);
-    if (timeSynced) return true;
+    if (timeSynced) {
+      String ipMsg = "IP: " + WiFi.localIP().toString();
+      drawCentered("WLAN Verbunden!", ipMsg.c_str());
+      delay(1200);
+      return true;
+    }
     delay(250);
   }
   return false;
@@ -607,11 +612,15 @@ void drawStatus() {
   tft.setTextColor(timeSynced ? TFT_GREEN : TFT_RED, TFT_BLACK);
   tft.drawString(timeSynced ? "Berlin Zeit OK" : "Zeit nicht synchron", SCREEN_W / 2, 32, 1);
   if (WiFi.status() == WL_CONNECTED) {
-    tft.setTextColor(0x7BEF, TFT_BLACK);
-    tft.drawString(WiFi.localIP().toString(), SCREEN_W / 2, 46, 1);
+    String ipStr = "IP: " + WiFi.localIP().toString();
+    tft.setTextColor(0x07FF, TFT_BLACK); // Bright Cyan
+    tft.drawString(ipStr, SCREEN_W / 2, 48, 2);
+  } else {
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.drawString("IP: Offline", SCREEN_W / 2, 48, 1);
   }
   for (uint8_t index = 0; index < kStationCount; ++index) {
-    int y = 68 + index * 41;
+    int y = 70 + index * 41;
     tft.fillCircle(14, y, 6, stations[index].online ? TFT_GREEN : TFT_RED);
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
