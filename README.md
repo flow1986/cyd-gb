@@ -137,6 +137,9 @@ Build commands:
 # Main project
 pio run -e cyd
 
+# BT-Laufzeitlogger (CSV auf SD, WLAN/NTP-Zeit)
+pio run -e btlogger
+
 # Beacon project (separate compile)
 pio run -d beacon-local -e esp32dev_sender
 
@@ -147,8 +150,22 @@ pio run -d beacon-local -e btkiste_timestamp
 ./scripts/build_both_local.sh
 ```
 
-After the combined build, the newest `gbscanner-*.bin`, `btsend-*.bin`, and
-`btkiste-*.bin` are copied automatically into the project root (`cyd-gb/`).
+After the combined build, the newest `gbscanner-*.bin`, `btlogger-*.bin`,
+`btsend-*.bin`, and `btkiste-*.bin` are copied automatically into the project
+root (`cyd-gb/`).
+
+## BT Logger
+
+Flash `btlogger` onto a CYD with a FAT32 SD card.
+
+- **WLAN-Scan & Touch-Tastatur**: Im Setup-Assistenten werden verfügbare WLANs automatisch gescannt und per Touch ausgewählt. Die Tastatur unterstützt Groß-, Kleinbuchstaben, Zahlen und Sonderzeichen inklusive `!` (`!@#$%^&*-_` etc.).
+- **Optionale Touch-Kalibrierung**: Beim Start erscheint kurz „Touch halten fuer Kalibrierung“. Wird das Display ~0,9 s gehalten, öffnet sich die 5-Punkt-Kalibrierung.
+- **Touch-Setup**: Beim ersten Start öffnet sich der Assistent für WLAN-Auswahl, Passwort sowie Name und MAC aller 5 Beacons (später über `SETUP` änderbar).
+- **Web-Interface**: Bei aktiver WLAN-Verbindung startet ein integrierter Webserver. Die IP-Adresse wird auf dem Display angezeigt (`http://192.168.x.x`). Im Browser können Status, Beacon-Empfang und SD-Logdateien direkt angesehen oder als CSV heruntergeladen werden.
+- **SD-Log-Viewer am CYD**: Über `LOGS` lassen sich die letzten CSV-Einträge auch direkt auf dem CYD-Display betrachten.
+- **Berlin-Zeit**: NTP-Synchronisation auf `CET-1CEST` inklusive automatischer Sommer-/Winterzeit-Umschaltung.
+
+Each build copies the timestamped `btlogger-*.bin` directly into the project root.
 
 ## Credits
 

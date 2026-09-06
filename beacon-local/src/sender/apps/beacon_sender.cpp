@@ -57,6 +57,9 @@ static constexpr int MORSE_STOP_TOUCH_WIDTH = 84;
 static constexpr int MORSE_STOP_TOUCH_HEIGHT = 20;
 static constexpr char kBleServiceUuid[] = "7f4ac8ec-9b6e-46f0-b6ee-6f95a2d0a920";
 static constexpr char kBlePasswordCharUuid[] = "7f4ac8ec-9b6e-46f0-b6ee-6f95a2d0a921";
+#if defined(BT_CHEST_BUILD)
+static constexpr uint8_t kDefaultServoPin = 27;
+#endif
 
 enum SenderView {
   VIEW_STATUS,
@@ -648,6 +651,29 @@ static void setDefaultLdrCalibration() {
   config.ldrBufferPercent = LDR_DEFAULT_BUFFER_PERCENT;
 }
 
+#if defined(BT_CHEST_BUILD)
+static bool isValidServoPin(uint8_t pin) {
+  switch (pin) {
+    case 4:
+    case 16:
+    case 17:
+    case 18:
+    case 22:
+    case 26:
+    case 27:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static uint8_t sanitizeServoPin(int pin) {
+  return pin >= 0 && pin <= 33 && isValidServoPin(static_cast<uint8_t>(pin))
+             ? static_cast<uint8_t>(pin)
+             : kDefaultServoPin;
+}
+#endif
+
 static void setDefaults() {
 #if defined(BT_CHEST_BUILD)
   snprintf(config.stationName, sizeof(config.stationName), "BT Kiste");
@@ -667,7 +693,7 @@ static void setDefaults() {
   config.allowedScannerId = 0;
   setDefaultLdrCalibration();
 #if defined(BT_CHEST_BUILD)
-  config.servoPin = 27;
+  config.servoPin = kDefaultServoPin;
   config.servoAngleOpen = 90;
   config.servoAngleClosed = 0;
 #endif
@@ -746,7 +772,7 @@ static void loadConfig() {
       }
     }
 #if defined(BT_CHEST_BUILD)
-    config.servoPin = constrain(senderPrefs.getInt("servoPin", config.servoPin), 0, 33);
+    config.servoPin = sanitizeServoPin(senderPrefs.getInt("servoPin", config.servoPin));
     config.servoAngleOpen = constrain(senderPrefs.getInt("servoOpen", config.servoAngleOpen), 0, 180);
     config.servoAngleClosed = constrain(senderPrefs.getInt("servoClosed", config.servoAngleClosed), 0, 180);
 #endif
@@ -786,12 +812,21 @@ static void saveConfig() {
 static void setChestServoAngle(uint8_t angle) {
   if (chestServo.attached() && attachedServoPin != config.servoPin) {
     chestServo.detach();
+    attachedServoPin = 255;
   }
   if (!chestServo.attached()) {
-    chestServo.attach(config.servoPin);
+    chestServo.setPeriodHertz(50);
+    chestServo.attach(config.servoPin, 500, 2400);
+    if (!chestServo.attached()) {
+      Serial.printf("Servo attach failed: GPIO %u\n", config.servoPin);
+      return;
+    }
     attachedServoPin = config.servoPin;
+    Serial.printf("Servo attached: GPIO %u, 50 Hz\n", config.servoPin);
   }
   chestServo.write(angle);
+  Serial.printf("Servo command: GPIO %u, %u deg, %d us\n",
+                config.servoPin, angle, chestServo.readMicroseconds());
 }
 
 static void closeChest() {
@@ -1145,7 +1180,7 @@ static void saveKeyboardBuffer() {
     }
 #if defined(BT_CHEST_BUILD)
     case 11:
-      config.servoPin = constrain(atoi(keyboardState.buffer), 0, 33);
+  config.servoPin = sanitizeServoPin(atoi(keyboardState.buffer));
       break;
     case 12:
       config.servoAngleOpen = constrain(atoi(keyboardState.buffer), 0, 180);
@@ -1818,6 +1853,8 @@ void btSenderEnter() {
   pinMode(LDR_PIN, INPUT);
   analogRead(LDR_PIN);
 #if defined(BT_CHEST_BUILD)
+  Serial.printf("Chest servo: GPIO %u, open %u deg, closed %u deg\n",
+                config.servoPin, config.servoAngleOpen, config.servoAngleClosed);
   closeChest();
 #endif
   startOrRefreshAdvertising();
